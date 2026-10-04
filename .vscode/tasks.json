@@ -1,0 +1,101 @@
+{
+    "version": "2.0.0",
+    "type": "process",
+    "command": "powershell.exe",
+    "options": {
+        "cwd": "${workspaceFolder}"
+    },
+    "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+    },
+    "tasks": [
+        {
+            "label": "ECG: Build",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "build"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "ECG: Upload",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "upload"
+            ],
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "ECG: Serial Monitor",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "monitor"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: Live Plot",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "plot"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: List Boards",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "boards"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: Setup Environment",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "setup"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

@@ -2,8 +2,9 @@ from collections import deque
 import serial
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import os
 
-PORT = "COM7"
+PORT = os.environ.get("ECG_PORT", "COM7")
 SAMPLE_RATE = 128
 WINDOW = SAMPLE_RATE * 5  # Five seconds
 
