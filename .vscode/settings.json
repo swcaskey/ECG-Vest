@@ -1,3 +1,6 @@
 {
-    "task.saveBeforeRun": "always"
+    "task.saveBeforeRun": "always",
+    "files.associations": {
+        "*.ino": "cpp"
+    }
 }

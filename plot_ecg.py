@@ -13,9 +13,10 @@ port = serial.Serial(PORT, 115200, timeout=0)
 pending = bytearray()
 
 fig, ax = plt.subplots()
+fig.canvas.manager.set_window_title("ECG Vest")
 (line,) = ax.plot([], [], linewidth=1)
 ax.set(
-    title="MAX30003 — Internal Test Signal",
+    title="ECG Vest — Live Signal",
     xlabel="Time relative to newest sample (seconds)",
     ylabel="ADC counts",
     xlim=(-5, 0),

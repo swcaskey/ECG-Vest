@@ -1,3 +1,14 @@
+# ECG Vest
+
+Arduino Nano ESP32 firmware and a Python live graph for MAX30003 acquisition
+over USB serial. The stream uses `ECG:<signed integer>` at 115200 baud;
+the graph displays ADC counts over a rolling five-second window at 128 samples/s.
+
+The current input source is the MAX30003's internal 1 Hz calibration waveform.
+Source selection is configured by `CNFG_EMUX` (`0x14`) and `CNFG_CAL` (`0x12`) in
+`ECG-Vest.ino`. This software allows for acquisition, decoding, serial format, and graph.
+In addition to: Chip identification, clock checks, and FIFO recovery.
+
 ## Setup Environment
 
 1. Clone the repository into a folder named `ECG-Vest`.
@@ -28,7 +39,13 @@ use the same serial port at a time.
 - `requirements.txt` — Python runtime dependencies.
 - `requirements-dev.txt` — Python development dependencies.
 - `.vscode/tasks.json` — VS Code task definitions.
+- `.vscode/c_cpp_properties.json` — IntelliSense compilation database configuration.
 - `.github/workflows/ci.yml` — continuous integration workflow.
+
+After successful compilation, Build regenerates
+`.build/intellisense_compile_commands.json`, including an entry for the original
+`ECG-Vest.ino`. Run Build to refresh IntelliSense after changing the board,
+libraries, or build configuration.
 
 When changing tools or dependencies, update the appropriate configuration,
 rerun setup, and verify formatting, syntax checks, and compilation.

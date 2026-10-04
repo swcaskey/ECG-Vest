@@ -58,8 +58,22 @@ void setup() {
   writeRegister(0x02, 0xC00003); // Enable sample-ready and overflow on INTB
   writeRegister(0x03, 0);        // INT2B disabled
   writeRegister(0x10, 0x080004); // ECG enabled; 32.768 kHz FCLK
-  writeRegister(0x14, 0x3B0000); // Disconnect electrodes; select test inputs
-  writeRegister(0x12, 0x704800); // Internal bipolar 1 Hz calibration
+
+  // ======================== ECG INPUT SOURCE ========================
+  // Change BOTH values below, then rebuild and upload the firmware.
+  //                         CNFG_EMUX (0x14)    CNFG_CAL (0x12)
+  // Internal calibration:   0x3B0000            0x704800  (CURRENT)
+  // Electrode input:        0x000000            0x000000
+  //
+  // Calibration: isolate electrode inputs and route the internal waveform.
+  // Electrodes: connect ECGP/ECGN inputs, remove the calibration routing,
+  // and disable the calibration generator. This selects the input only;
+  // electrode integration and biasing still require a separate review.
+  // Human-connected use requires a reviewed electrical safety setup.
+  writeRegister(0x14, 0x3B0000); // CNFG_EMUX: internal calibration input
+  writeRegister(0x12, 0x704800); // CNFG_CAL: enable bipolar 1 Hz waveform
+  // ====================== END ECG INPUT SOURCE ======================
+
   writeRegister(0x15, 0x805000); // 128 samples/s, gain 20, filters enabled
 
   delay(1000);        // Allow clock and analog circuits to settle

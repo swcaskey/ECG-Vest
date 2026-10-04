@@ -73,14 +73,60 @@ function Install-Analyzer {
     Write-Host "READY  PSScriptAnalyzer $version"
 }
 
+function Update-IntelliSenseDatabase {
+    $databasePath = Join-Path $BuildDir "compile_commands.json"
+    $outputPath = Join-Path $BuildDir "intellisense_compile_commands.json"
+    $sketchPath = Join-Path $ProjectRoot "ECG-Vest.ino"
+    $generatedPath = Join-Path $BuildDir "sketch\ECG-Vest.ino.cpp"
+
+    # Assign before wrapping: PowerShell 5.1 does not enumerate JSON arrays.
+    $database = Get-Content -LiteralPath $databasePath -Raw | ConvertFrom-Json
+    $entries = @($database)
+    $matches = @($entries | Where-Object {
+            $_.file.Replace('\', '/') -eq $generatedPath.Replace('\', '/')
+        })
+    if ($matches.Count -ne 1 -or -not $matches[0].arguments) {
+        throw "Compilation database must contain one generated sketch entry with arguments."
+    }
+
+    $sketchEntry = $matches[0].PSObject.Copy()
+    $sketchEntry.file = $sketchPath.Replace('\', '/')
+    $sketchEntry.arguments = @(
+        $matches[0].arguments[0]
+        # The original .ino needs C++ mode and Arduino's implicit header.
+        "-x"
+        "c++"
+        "-include"
+        "Arduino.h"
+        foreach ($argument in ($matches[0].arguments | Select-Object -Skip 1)) {
+            if ($argument.Replace('\', '/') -eq $generatedPath.Replace('\', '/')) {
+                $sketchEntry.file
+            }
+            else {
+                $argument
+            }
+        }
+    )
+
+    # -InputObject preserves the top-level array, even with only one entry.
+    $json = ConvertTo-Json -InputObject @($entries + $sketchEntry) -Depth 10
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($outputPath, $json + "`n", $utf8)
+    Write-Host "READY  .build/intellisense_compile_commands.json ($($entries.Count + 1) entries)"
+}
+
 function Build-Firmware {
-    Invoke-Checked "arduino-cli" @(
+    $compileArguments = @(
         "compile",
         "--fqbn", $Board,
         "--build-path", $BuildDir,
         "--warnings", "all",
         $ProjectRoot
     )
+    Invoke-Checked "arduino-cli" $compileArguments
+    # Refresh all commands, including files reused from the build cache.
+    Invoke-Checked "arduino-cli" ($compileArguments + "--only-compilation-database")
+    Update-IntelliSenseDatabase
 }
 
 function Find-BoardPort {
