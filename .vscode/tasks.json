@@ -12,7 +12,29 @@
     },
     "tasks": [
         {
-            "label": "ECG: Build",
+            "label": "ECG: 1. Format Code",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/format.ps1"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 2. Check Syntax",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/check-syntax.ps1"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 3. Build",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -31,7 +53,7 @@
             ]
         },
         {
-            "label": "ECG: Upload",
+            "label": "ECG: 4. Upload",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -46,20 +68,7 @@
             ]
         },
         {
-            "label": "ECG: Serial Monitor",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/ecg.ps1",
-                "-Action",
-                "monitor"
-            ],
-            "problemMatcher": []
-        },
-        {
-            "label": "ECG: Live Plot",
+            "label": "ECG: 5. Live Plot",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -72,7 +81,20 @@
             "problemMatcher": []
         },
         {
-            "label": "ECG: List Boards",
+            "label": "ECG: 6. Serial Monitor",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "monitor"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 7. List Boards",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -85,7 +107,7 @@
             "problemMatcher": []
         },
         {
-            "label": "ECG: Setup Environment",
+            "label": "ECG: 8. Setup Environment",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",

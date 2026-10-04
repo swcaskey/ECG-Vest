@@ -8,7 +8,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Board = "arduino:esp32:nano_nora"
+$Toolchain = Get-Content (Join-Path $ProjectRoot "toolchain.json") -Raw | ConvertFrom-Json
+$Board = $Toolchain.board
 $BuildDir = Join-Path $ProjectRoot ".build"
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 
@@ -27,11 +28,57 @@ function Invoke-Checked {
     }
 }
 
+function Install-Analyzer {
+    $version = $Toolchain.psScriptAnalyzer
+    if (-not (Get-Module -ListAvailable PSScriptAnalyzer | Where-Object { $_.Version -eq $version })) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        try {
+            Write-Host "Installing PSScriptAnalyzer $version through PowerShell Gallery..."
+            Install-PackageProvider NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force -ErrorAction Stop | Out-Null
+            Install-Module PSScriptAnalyzer -RequiredVersion $version -Repository PSGallery -Scope CurrentUser -Force -ErrorAction Stop
+            Import-Module PSScriptAnalyzer -RequiredVersion $version -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Host "Standard module installation failed: $($_.Exception.Message)"
+            Write-Host "Downloading PSScriptAnalyzer $version directly from PowerShell Gallery..."
+            $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("ecg-analyzer-" + [guid]::NewGuid().ToString())
+            try {
+                New-Item -ItemType Directory -Path $staging -Force | Out-Null
+                $archive = Join-Path $staging "module.zip"
+                $unpacked = Join-Path $staging "module"
+                Invoke-WebRequest -UseBasicParsing -ErrorAction Stop `
+                    -Uri "https://www.powershellgallery.com/api/v2/package/PSScriptAnalyzer/$version" `
+                    -OutFile $archive
+                Expand-Archive -Path $archive -DestinationPath $unpacked -Force
+                Get-ChildItem $unpacked -Recurse -File | Unblock-File
+                $manifest = Join-Path $unpacked "PSScriptAnalyzer.psd1"
+                $metadata = Test-ModuleManifest -Path $manifest -ErrorAction Stop
+                if ($metadata.Version -ne [version]$version) {
+                    throw "Downloaded module version does not match $version."
+                }
+                $moduleRoot = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WindowsPowerShell\Modules"
+                $destination = Join-Path $moduleRoot "PSScriptAnalyzer\$version"
+                New-Item -ItemType Directory -Path $destination -Force | Out-Null
+                Copy-Item -Path (Join-Path $unpacked "*") -Destination $destination -Recurse -Force
+            }
+            finally {
+                if (Test-Path -LiteralPath $staging) {
+                    Remove-Item -LiteralPath $staging -Recurse -Force
+                }
+            }
+        }
+    }
+    # Verify discovery by name, as format.ps1 will use it in a separate process.
+    Import-Module PSScriptAnalyzer -RequiredVersion $version -Force -ErrorAction Stop
+    Write-Host "READY  PSScriptAnalyzer $version"
+}
+
 function Build-Firmware {
     Invoke-Checked "arduino-cli" @(
         "compile",
         "--fqbn", $Board,
         "--build-path", $BuildDir,
+        "--warnings", "all",
         $ProjectRoot
     )
 }
@@ -83,18 +130,31 @@ try {
 
     switch ($Action) {
         "setup" {
+            if ($PSVersionTable.PSEdition -ne "Desktop" -or $PSVersionTable.PSVersion -lt [version]"5.1") {
+                throw "Run Setup Environment from the VS Code task, or run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ecg.ps1 -Action setup"
+            }
+            $cli = (& arduino-cli version --format json | Out-String) | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $cli.VersionString -ne $Toolchain.arduinoCli) {
+                throw "Install Arduino CLI $($Toolchain.arduinoCli) to match CI."
+            }
+            $pythonVersion = & python -c "import sys; print(str(sys.version_info.major) + '.' + str(sys.version_info.minor))"
+            if ($LASTEXITCODE -ne 0 -or $pythonVersion -ne $Toolchain.python) {
+                throw "Put Python $($Toolchain.python) on PATH and restart VS Code."
+            }
+            Install-Analyzer
             Invoke-Checked "arduino-cli" @("core", "update-index")
             Invoke-Checked "arduino-cli" @(
                 "core", "install",
-                "arduino:esp32@2.0.18-arduino.5"
+                $Toolchain.core
             )
 
             if (-not (Test-Path $Python)) {
-                Invoke-Checked "py" @("-m", "venv", ".venv")
+                Invoke-Checked "python" @("-m", "venv", ".venv")
             }
 
+            Invoke-Checked $Python @("-c", "import sys; assert str(sys.version_info.major) + '.' + str(sys.version_info.minor) == '$($Toolchain.python)', 'Recreate .venv with the required Python version'")
             Invoke-Checked $Python @(
-                "-m", "pip", "install", "-r", "requirements.txt"
+                "-m", "pip", "install", "-r", "requirements-dev.txt"
             )
         }
 

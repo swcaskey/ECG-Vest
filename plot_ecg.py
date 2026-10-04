@@ -13,7 +13,7 @@ port = serial.Serial(PORT, 115200, timeout=0)
 pending = bytearray()
 
 fig, ax = plt.subplots()
-line, = ax.plot([], [], linewidth=1)
+(line,) = ax.plot([], [], linewidth=1)
 ax.set(
     title="MAX30003 — Internal Test Signal",
     xlabel="Time relative to newest sample (seconds)",
@@ -41,15 +41,12 @@ def update(_):
             print(text)
 
     values = list(samples)
-    times = [(i - len(values) + 1) / SAMPLE_RATE
-             for i in range(len(values))]
+    times = [(i - len(values) + 1) / SAMPLE_RATE for i in range(len(values))]
     line.set_data(times, values)
     return (line,)
 
 
-animation = FuncAnimation(
-    fig, update, interval=30, cache_frame_data=False
-)
+animation = FuncAnimation(fig, update, interval=30, cache_frame_data=False)
 
 try:
     plt.show()
