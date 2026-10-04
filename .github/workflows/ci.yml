@@ -1,0 +1,108 @@
+name: ECG Vest CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: Compile Nano ESP32 firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          path: ECG-Vest
+          persist-credentials: false
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: "1.5.1"
+
+      - name: Install tested Arduino board core
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install arduino:esp32@2.0.18-arduino.5
+
+      - name: Compile firmware
+        run: |
+          arduino-cli compile \
+            --fqbn arduino:esp32:nano_nora \
+            --warnings all \
+            --output-dir "$RUNNER_TEMP/firmware" \
+            "$GITHUB_WORKSPACE/ECG-Vest"
+
+      - name: Save compiled firmware
+        uses: actions/upload-artifact@v7
+        with:
+          name: nano-esp32-firmware-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/firmware/*.bin
+            ${{ runner.temp }}/firmware/*.elf
+          if-no-files-found: error
+          retention-days: 14
+
+  scripts:
+    name: Check Python and PowerShell syntax
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Check Python syntax
+        run: python -m py_compile plot_ecg.py
+
+      - name: Check PowerShell syntax
+        shell: powershell
+        run: |
+          $files = @(Get-ChildItem scripts -Filter *.ps1 -Recurse)
+
+          if ($files.Count -eq 0) {
+              throw "No PowerShell scripts found."
+          }
+
+          $failed = $false
+
+          foreach ($file in $files) {
+              $tokens = $null
+              $parseErrors = $null
+
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  $file.FullName,
+                  [ref]$tokens,
+                  [ref]$parseErrors
+              ) | Out-Null
+
+              if ($parseErrors.Count -gt 0) {
+                  $failed = $true
+                  foreach ($issue in $parseErrors) {
+                      Write-Host "$($file.Name): $($issue.Message)"
+                  }
+              } else {
+                  Write-Host "PASS: $($file.Name)"
+              }
+          }
+
+          if ($failed) {
+              throw "PowerShell syntax check failed."
+          }
