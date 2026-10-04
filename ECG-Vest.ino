@@ -1,6 +1,7 @@
 #include <SPI.h>
 
 constexpr int CS_PIN = D10;
+constexpr int INT_PIN = D2;
 const SPISettings MAX_SPI(1000000, MSBFIRST, SPI_MODE0);
 
 uint32_t readRegister(uint8_t address)
@@ -58,7 +59,9 @@ void setup()
         }
     }
 
-    writeRegister(0x02, 0);        // INTB disabled: polling test
+    pinMode(INT_PIN, INPUT_PULLUP);
+    writeRegister(0x04, 0x380004); // Interrupt when 8 samples are available
+    writeRegister(0x02, 0xC00003); // Enable sample-ready and overflow on INTB
     writeRegister(0x03, 0);        // INT2B disabled
     writeRegister(0x10, 0x080004); // ECG enabled; 32.768 kHz FCLK
     writeRegister(0x14, 0x3B0000); // Disconnect electrodes; select test inputs
@@ -83,6 +86,12 @@ void setup()
 
 void loop()
 {
+    if (digitalRead(INT_PIN) == HIGH)
+    {
+        delay(1);
+        return; // Wait until MAX pulls INTB LOW
+    }
+
     // Drain available samples, with a bounded loop.
     for (int i = 0; i < 32; ++i)
     {
