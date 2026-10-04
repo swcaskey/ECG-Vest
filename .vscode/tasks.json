@@ -1,7 +1,5 @@
 {
     "version": "2.0.0",
-    "type": "process",
-    "command": "powershell.exe",
     "options": {
         "cwd": "${workspaceFolder}"
     },
@@ -13,6 +11,8 @@
     "tasks": [
         {
             "label": "ECG: 1. Format Code",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -24,6 +24,8 @@
         },
         {
             "label": "ECG: 2. Check Syntax",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -35,6 +37,8 @@
         },
         {
             "label": "ECG: 3. Build",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -54,6 +58,8 @@
         },
         {
             "label": "ECG: 4. Upload",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -69,6 +75,8 @@
         },
         {
             "label": "ECG: 5. Live Plot",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -82,6 +90,8 @@
         },
         {
             "label": "ECG: 6. Serial Monitor",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -95,6 +105,8 @@
         },
         {
             "label": "ECG: 7. List Boards",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -108,6 +120,8 @@
         },
         {
             "label": "ECG: 8. Setup Environment",
+            "type": "process",
+            "command": "powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
