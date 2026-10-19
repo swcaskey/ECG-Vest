@@ -4,9 +4,18 @@ Arduino Nano ESP32 firmware and a Python live graph for MAX30003 acquisition
 over USB serial. The stream uses `ECG:<signed integer>` at 115200 baud;
 the graph displays ADC counts over a rolling five-second window at 128 samples/s.
 
-Source selection is configured by `CNFG_EMUX` (`0x14`) and `CNFG_CAL` (`0x12`) in
-`ECG-Vest.ino`. This software allows for acquisition, decoding, serial format, and graph.
-In addition to: Chip identification, clock checks, and FIFO recovery.
+Choose `0` for the internal 1 Hz test signal or `1` for electrodes:
+
+- **Live Plot** prompts in the terminal; Enter defaults to `0`.
+- **Serial Monitor** accepts `0` or `1` followed by Enter.
+
+Acquisition waits for a selection. To change modes, reopen Live Plot or send
+another selection in Serial Monitor; no rebuild is needed after the initial upload.
+
+Electrode cable: red = ECGP (+), blue = ECGN (-), black = VCM body bias, not ground.
+
+Human-connected testing requires a separately reviewed electrical safety setup;
+the direct laptop USB connection is not a patient-isolation barrier.
 
 ## Setup Environment
 
