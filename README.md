@@ -3,8 +3,7 @@
 Arduino Nano ESP32 firmware and a Python live graph for two MAX30003WING boards
 over USB serial using the E2 protocol at 115200 baud. The graph shows measured
 Lead I and Lead III, plus estimated Lead II, in ADC counts over a rolling
-five-second window at 128 samples/s. Lead II is unavailable by default until
-physical timing validation is complete.
+five-second window at 128 samples/s.
 
 Choose `0` for both boards' internal 1 Hz test signals or `1` for electrodes:
 
