@@ -57,7 +57,22 @@
             ]
         },
         {
-            "label": "ECG: 4. Upload",
+            "label": "ECG: 4. Run Unit Tests",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "test"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 5. Upload",
             "type": "process",
             "command": "powershell.exe",
             "args": [
@@ -74,37 +89,7 @@
             ]
         },
         {
-            "label": "ECG: 5. Live Plot",
-            "type": "process",
-            "command": "powershell.exe",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/ecg.ps1",
-                "-Action",
-                "plot"
-            ],
-            "problemMatcher": []
-        },
-        {
-            "label": "ECG: 6. Serial Monitor",
-            "type": "process",
-            "command": "powershell.exe",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/ecg.ps1",
-                "-Action",
-                "monitor"
-            ],
-            "problemMatcher": []
-        },
-        {
-            "label": "ECG: 7. List Boards",
+            "label": "ECG: 6. List Boards",
             "type": "process",
             "command": "powershell.exe",
             "args": [
@@ -119,7 +104,54 @@
             "problemMatcher": []
         },
         {
-            "label": "ECG: 8. Setup Environment",
+            "label": "ECG: 7. Serial Monitor",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "monitor"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 8. Live Plot",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "plot"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 9. Start Recording",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "plot",
+                "-RecordPath",
+                "${input:recordingName}"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: * Setup Environment",
             "type": "process",
             "command": "powershell.exe",
             "args": [
@@ -132,6 +164,29 @@
                 "setup"
             ],
             "problemMatcher": []
+        },
+        {
+            "label": "ECG: 10. Replay Recording",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "replay"
+            ],
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "recordingName",
+            "type": "promptString",
+            "description": "New CSV filename (saved in recordings/; use a new name each time)",
+            "default": "recording.csv"
         }
     ]
 }

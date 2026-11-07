@@ -21,13 +21,21 @@ try {
     Import-Module PSScriptAnalyzer -RequiredVersion $toolchain.psScriptAnalyzer -ErrorAction Stop
 
     $rootFiles = @(Get-ChildItem $ProjectRoot -File)
+    # Visit source directories explicitly; never traverse environments or recordings.
+    $sourceFiles = @($rootFiles)
+    foreach ($directory in @("ecg", "src", "tests")) {
+        $sourcePath = Join-Path $ProjectRoot $directory
+        if (Test-Path -LiteralPath $sourcePath -PathType Container) {
+            $sourceFiles += @(Get-ChildItem -LiteralPath $sourcePath -File -Recurse | Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' })
+        }
+    }
 
     $pythonFiles = @(
-        $rootFiles | Where-Object { $_.Extension -eq ".py" }
+        $sourceFiles | Where-Object { $_.Extension -eq ".py" }
     )
 
     $cppFiles = @(
-        $rootFiles | Where-Object {
+        $sourceFiles | Where-Object {
             $_.Extension -in @(".ino", ".c", ".cpp", ".h", ".hpp")
         }
     )
@@ -40,8 +48,8 @@ try {
     $before = @{}
 
     Write-Host "File types and locations:"
-    Write-Host "  Python:     *.py in the project root"
-    Write-Host "  Arduino/C:  *.ino, *.c, *.cpp, *.h, *.hpp in the project root"
+    Write-Host "  Python:     root, ecg/, src/, tests/"
+    Write-Host "  Arduino/C:  root, src/, tests/, ecg/"
     Write-Host "  PowerShell: scripts/**/*.ps1"
     Write-Host "  JSON/YAML:  not formatted"
     Write-Host ""

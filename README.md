@@ -1,18 +1,21 @@
 # ECG Vest
 
-Arduino Nano ESP32 firmware and a Python live graph for MAX30003 acquisition
-over USB serial. The stream uses `ECG:<signed integer>` at 115200 baud;
-the graph displays ADC counts over a rolling five-second window at 128 samples/s.
+Arduino Nano ESP32 firmware and a Python live graph for two MAX30003WING boards
+over USB serial using the E2 protocol at 115200 baud. The graph shows measured
+Lead I and Lead III, plus estimated Lead II, in ADC counts over a rolling
+five-second window at 128 samples/s. Lead II is unavailable by default until
+physical timing validation is complete.
 
-Choose `0` for the internal 1 Hz test signal or `1` for electrodes:
+Choose `0` for both boards' internal 1 Hz test signals or `1` for electrodes:
 
 - **Live Plot** prompts in the terminal; Enter defaults to `0`.
-- **Serial Monitor** accepts `0` or `1` followed by Enter.
+- **Serial Monitor** prompts for `0` or `1` at startup.
 
-Acquisition waits for a selection. To change modes, reopen Live Plot or send
-another selection in Serial Monitor; no rebuild is needed after the initial upload.
+Acquisition waits for a selection. To change modes, reopen Live Plot or Serial
+Monitor; no rebuild is needed after the initial upload.
 
 Electrode cable: red = ECGP (+), blue = ECGN (-), black = VCM body bias, not ground.
+Use Board 1's black lead for body bias; keep Board 2's black lead insulated.
 
 Human-connected testing requires a separately reviewed electrical safety setup;
 the direct laptop USB connection is not a patient-isolation barrier.
@@ -25,18 +28,21 @@ the direct laptop USB connection is not a patient-isolation barrier.
 
 ## Development Workflow
 
-Run these VS Code tasks before committing:
+Open **Terminal > Run Task**. Run tasks 1–4 before committing.
 
-1. **Format Code** — apply consistent source formatting.
-2. **Check Syntax** — check Python/PowerShell syntax and source formatting.
-3. **Build** — compile the firmware for the configured board.
-
-For hardware development:
-
-- **List Boards** displays connected boards.
-- **Upload** builds and uploads firmware to a detected supported board.
-- **Serial Monitor** displays serial output.
-- **Live Plot** opens the Python visualization.
+| Task | Purpose |
+| --- | --- |
+| `ECG: 1. Format Code` | Format source files. |
+| `ECG: 2. Check Syntax` | Check Python/PowerShell syntax and formatting. |
+| `ECG: 3. Build` | Compile firmware. |
+| `ECG: 4. Run Unit Tests` | Run automated software checks without hardware. |
+| `ECG: 5. Upload` | Build and upload firmware to the Nano. |
+| `ECG: 6. List Boards` | List connected boards and ports. |
+| `ECG: 7. Serial Monitor` | Choose a mode at startup and view serial output. |
+| `ECG: 8. Live Plot` | Show live graphs; choose mode `0` or `1`. |
+| `ECG: 9. Start Recording` | Name a CSV and plot while saving data to `recordings/`. |
+| `ECG: 10. Replay Recording` | Select a saved recording by number and graph it. |
+| `ECG: * Setup Environment` | Install the board core and development dependencies. |
 
 Close the serial monitor or plot before uploading. Only one application should
 use the same serial port at a time.

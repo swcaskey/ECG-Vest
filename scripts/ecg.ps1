@@ -1,9 +1,20 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("build", "upload", "monitor", "plot", "boards", "setup")]
+    [ValidateSet("build", "upload", "monitor", "plot", "boards", "setup", "test", "replay")]
     [string]$Action,
 
-    [string]$Port = ""
+    [string]$Port = "",
+
+    [string]$RecordingPath = "",
+
+    [string]$RecordPath = "",
+
+    [ValidateRange(1, 1000000)]
+    [double]$Range = 8000,
+
+    [switch]$Headless,
+
+    [switch]$AllowUnvalidatedTiming
 )
 
 $ErrorActionPreference = "Stop"
@@ -129,9 +140,37 @@ function Build-Firmware {
     Update-IntelliSenseDatabase
 }
 
+function Select-Recording {
+    $recordingsRoot = Join-Path $ProjectRoot "recordings"
+    $recordings = @()
+    if (Test-Path -LiteralPath $recordingsRoot -PathType Container) {
+        $recordings = @(Get-ChildItem -LiteralPath $recordingsRoot -Filter *.csv -File -Recurse | Sort-Object FullName)
+    }
+    if ($recordings.Count -eq 0) {
+        throw "No CSV recordings found in recordings/. Use Start Recording first."
+    }
+
+    Write-Host "Saved recordings:"
+    for ($i = 0; $i -lt $recordings.Count; $i++) {
+        Write-Host ("{0}. {1}" -f ($i + 1), $recordings[$i].FullName.Substring($recordingsRoot.Length + 1))
+    }
+    while ($true) {
+        $selection = Read-Host "Choose a recording number (q to cancel)"
+        if ($selection -eq "q") { return $null }
+        $number = 0
+        if ([int]::TryParse($selection, [ref]$number) -and $number -ge 1 -and $number -le $recordings.Count) {
+            return $recordings[$number - 1].FullName
+        }
+        Write-Host "Enter a number from 1 to $($recordings.Count), or q to cancel."
+    }
+}
+
 function Find-BoardPort {
     if ($Port) {
         return $Port
+    }
+    if ($env:ECG_PORT) {
+        return $env:ECG_PORT
     }
 
     $raw = & arduino-cli board list --json
@@ -170,7 +209,7 @@ function Find-BoardPort {
 }
 
 try {
-    if (-not (Get-Command arduino-cli -ErrorAction SilentlyContinue)) {
+    if ($Action -notin @("test", "replay") -and -not (Get-Command arduino-cli -ErrorAction SilentlyContinue)) {
         throw "Install Arduino CLI and restart VS Code first."
     }
 
@@ -223,11 +262,12 @@ try {
         }
 
         "monitor" {
+            if (-not (Test-Path $Python)) { throw "Run ECG: Setup Environment first." }
             $SelectedPort = Find-BoardPort
-            Invoke-Checked "arduino-cli" @(
-                "monitor",
-                "--port", $SelectedPort,
-                "--config", "baudrate=115200"
+            Invoke-Checked $Python @(
+                (Join-Path $ProjectRoot "plot_ecg.py"),
+                "--monitor",
+                "--port", $SelectedPort
             )
         }
 
@@ -240,9 +280,33 @@ try {
             $env:ECG_PORT = $SelectedPort
             Write-Host "Opening graph on $SelectedPort"
 
-            Invoke-Checked $Python @(
-                (Join-Path $ProjectRoot "plot_ecg.py")
-            )
+            $plotArguments = @((Join-Path $ProjectRoot "plot_ecg.py"), "--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
+            if ($RecordPath) { $plotArguments += @("--record", $RecordPath) }
+            if ($Headless) { $plotArguments += "--headless" }
+            if ($AllowUnvalidatedTiming) { $plotArguments += "--allow-unvalidated-timing" }
+            Invoke-Checked $Python $plotArguments
+        }
+
+        "test" {
+            if (-not (Test-Path $Python)) { throw "Run ECG: Setup Environment first." }
+            Invoke-Checked $Python @("-B", "-m", "unittest", "discover", "-s", "tests", "-v")
+        }
+
+        "replay" {
+            if (-not (Test-Path $Python)) { throw "Run ECG: Setup Environment first." }
+            $SelectedRecording = $RecordingPath
+            if (-not $SelectedRecording) {
+                if ($Headless) { throw "Headless replay requires -RecordingPath." }
+                $SelectedRecording = Select-Recording
+                if (-not $SelectedRecording) { return }
+            }
+            if (-not (Test-Path -LiteralPath $SelectedRecording -PathType Leaf)) {
+                throw "Provide an existing CSV recording with -RecordingPath."
+            }
+            $replayArguments = @((Join-Path $ProjectRoot "plot_ecg.py"), "--replay", $SelectedRecording, "--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
+            if ($Headless) { $replayArguments += "--headless" }
+            if ($AllowUnvalidatedTiming) { $replayArguments += "--allow-unvalidated-timing" }
+            Invoke-Checked $Python $replayArguments
         }
 
         "boards" {

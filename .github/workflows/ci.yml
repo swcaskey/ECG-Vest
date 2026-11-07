@@ -41,6 +41,8 @@ jobs:
         run: ./scripts/ecg.ps1 -Action setup
       - name: Check syntax and formatting without changing source
         run: ./scripts/check-syntax.ps1
+      - name: Run protocol and timing tests without hardware
+        run: ./scripts/ecg.ps1 -Action test
       - name: Build firmware using the local build script
         run: ./scripts/ecg.ps1 -Action build
       - name: Save compiled firmware
