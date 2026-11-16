@@ -1,171 +1,123 @@
-# Two-board timing and physical acceptance
+# Two-board timing and bench acceptance
 
-## References and configuration
+## Configuration
 
-References included in this directory:
+References: [MAX30003 Rev 3](01_MAX30003_Datasheet.pdf), pp19, 26, 28-31,
+33-37 and 41-43; [WING schematic](02_MAX30003WING_Guide_and_Schematic.pdf), p5.
+Nano ESP32 uses the pinned core and tool versions in `toolchain.json`.
 
-- [MAX30003 datasheet](01_MAX30003_Datasheet.pdf), Rev 3: p19 Table 4; pp24-29 register/interrupt
-  maps; p31 SYNCH/FIFO_RST; pp32-37 front-end configuration; pp41-43 FIFO tags.
-- [MAX30003WING guide and schematic](02_MAX30003WING_Guide_and_Schematic.pdf): p2 headers, p5 schematic.
-- Nano ESP32 [datasheet](03_Nano_ESP32_Datasheet.pdf),
-  [pinout](04_Nano_ESP32_Full_Pinout.pdf) and
-  [schematic](05_Nano_ESP32_Schematic.pdf): D13/GPIO48,
-  D11/GPIO38, D12/GPIO47, D10/GPIO21, D9/GPIO18, D2/GPIO5, D3/GPIO6;
-  shared circuit ground and direct USB. The
-  [ESP32-S3 datasheet](06_ESP32_S3_Datasheet.pdf) is background.
-- The installed Arduino core is `2.0.18-arduino.5`, not a generic current ESP-IDF.
-  Its esp_timer.h and esp32-hal-gpio.c support the used timer/interrupt APIs.
+| Physical board | CS / INTB | Current electrode connection |
+| --- | --- | --- |
+| 1 | D10 / D2 | III = LL - LA; sleeve unused |
+| 2 | D9 / D3 | I = LA - RA; sleeve supplies RL bias |
 
-SPI remains mode 0, MSB first, 1 MHz. Both CS outputs are HIGH before SPI starts.
-Only a write-only SYNCH selects both chips. Reads always select one board.
+Shared SPI is D13 SCLK, D11 MOSI, D12 MISO, mode 0, MSB first, 1 MHz.
+Both boards share 3V3 and circuit ground. Only write-only SYNCH selects both chips;
+reads select one. Independent onboard FCLK oscillators remain unchanged.
+Do not join the two VCM outputs or connect VCM to circuit ground.
 
-| Register | Value / interpretation |
+| Register | Value |
 | --- | --- |
-| CNFG_GEN 0x10 | 0x080004, ECG on; FMSTR00; internal bias/lead-off off |
-| CNFG_EMUX 0x14 | 0x3B0000 internal isolated calibration; 0 external |
-| CNFG_CAL 0x12 | 0x704800 bipolar 1 Hz internal; 0 external |
-| CNFG_ECG 0x15 | 0x805000, 128 sps, gain20, HP/LP enabled |
-| EN_INT 0x02 | 0x000201: SAMP bit9 only, active-low CMOS on separate INTB wires (p28) |
-| EN_INT2 0x03 | 0, unused |
-| MNGR_INT 0x04 | 0x380004: EFIT7 = 8 entries; CLR_SAMP1; SAMP_IT00 |
+| CNFG_GEN 0x10 | 0x080004: ECG on; internal bias/lead-off off |
+| CNFG_EMUX 0x14 | 0x3B0000 internal isolated test; 0 external |
+| CNFG_CAL 0x12 | 0x704800 bipolar 1 Hz test; 0 external |
+| CNFG_ECG 0x15 | 0x805000: 128 sps, gain20, HP/LP enabled |
+| EN_INT 0x02 | 0x800001: FIFO-threshold EINT only, active-low CMOS |
+| EN_INT2 0x03 | 0: unused |
+| MNGR_INT 0x04 | 0x380004: eight unread samples assert EINT |
 
-SAMP is a dedicated self-clearing timing term (p27/29). EINT/EOVF/PLL are
-polled separately every 4 ms so persistent terms cannot conceal timing edges.
-Each service pass drains at most eight words per board. Status is transmitted
-once per second. Identity, PLL lock and all configured registers are checked
-on both boards; no one-channel success is presented as two-board readiness.
-A one-second per-board FIFO-data watchdog also catches a stalled data path even
-if timing edges keep arriving.
+## Sample association and clock fitting
 
-## Time model and unresolved association
+EINT asserts when eight unread FIFO entries are available and stays asserted
+until reads reduce that count below eight. Its falling edge therefore identifies
+the eighth unread entry: `first_unread_sequence + 7`. The ISR records common
+`esp_timer_get_time()` time and the protected FIFO-read count; no SPI, allocation
+or serial work occurs in the ISR. This replaces the older SAMP-first-edge guess.
 
-Both onboard FCLK oscillators remain active. Simultaneous SYNCH is a launch
-observation, not exact shared-clock synchronization. Each falling INTB edge
-captures `esp_timer_get_time()` and a 64-bit pulse counter into a fixed ISR ring.
-The timestamp is GPIO interrupt observation time, with interrupt latency/jitter.
-No SPI/serial/allocation/fitting occurs in the ISR. Critical sections protect
-all ISR/main shared counters and event copies, including 64-bit values.
+Main verifies the interrupt and threshold batch before accepting the anchor.
+Edges during FIFO reads, duplicate/missing edges and queue losses invalidate
+timing. Backlog draining does not invent anchors. Measured ECG continues through
+timing-only faults; FIFO, PLL, transport and data faults restart both boards
+in a new epoch. Invalid timing clears calculated II. USB reconnect requires
+a new mode selection.
 
-FMSTR00 gives 512 Hz ECG progressions (p33/37), while the FIFO is configured for
-128 sps. The first internal run observed about 128 SAMP edges/s, so firmware now
-advertises **ratio 1**. This measured rate does not establish the first-pulse/FIFO
-phase. Pulse width still needs a scope check. These edges are not timestamps
-attached to the next FIFO read. Local firmware captures every edge;
-it transmits the first and every 32nd anchor. Startup interval consistency,
-missing/glitch edges, queue loss and stale timing cause an explicit fault.
+An associated A record contains a one-based FIFO sample position, not an IRQ
+callback count. For position n the host estimates:
 
-The host fits pulse number against common MCU microseconds over at most 256
-anchors. Centered robust fitting rejects outliers and continuously updates
-offset/rate; readiness requires adequate span, plausible rate and bounded
-residual. It never uses cardiac peak matching or packet arrival times.
+    t_i(n) = fit_i(n + 1) - 4906 * fitted_sample_period_i / 256
 
-Candidate output mapping for FIFO position n:
+4906 master-clock ticks is the configured LPF delay (Table 4, p19), nominally
+149.719 ms. Matching filters remove their common nominal delay from relative
+alignment; this is not an absolute electrode-event timestamp or a complete
+frequency-dependent HPF delay model.
 
-    t_i(n) = fit_i(ratio_i * (n + 1)) - 4906 * b_i / 256
-    b_i = ratio_i * fitted_pulse_period_i
-    relative_ppm = 1e6 * (fs_III / fs_I - 1)
+Centered robust fitting tracks each independent sample clock in common MCU time.
+Readiness requires enough anchors/span, a plausible rate and bounded residual.
+The firmware association flag describes a known FIFO index, not a precision
+certificate. Legacy recordings with association 0 remain unvalidated; an optional
+exploratory override never changes their recorded association.
 
-Positive drift means Board 2 samples faster. Table 4 p19 gives 4906 master-input
-ticks of LPF latency at 32768 Hz / 128 sps, nominally 149.719 ms. The delay is
-scaled with measured clock rate. The n+1 phase hypothesis and any first-edge
-miss during post-SYNCH ISR arming remain **unvalidated**; matching configurations
-remove nominal channel-delay differences but not this unknown offset. The common
-filter delay is not an exact frequency-independent characterization of the HPF.
-Small fit residuals do not prove correct integer/fractional FIFO-to-pulse phase.
+II is computed on a common 128 Hz grid only where both streams bracket a point.
+Interpolation does not cross missing/settling positions, epochs or resets and
+does not extrapolate. Raw values are neither normalized nor polarity-corrected
+before addition. Linear interpolation error increases with frequency: its maximum
+sine midpoint attenuation is about 0.75% at 5 Hz and 23% at 28.35 Hz. Timing precision
+and amplitude reconstruction are separate acceptance measurements.
 
-Firmware reports association_valid=0. Default Lead II therefore remains
-unavailable, even with good rate fits. `--allow-unvalidated-timing` enables only
-an explicitly labeled exploratory sum. `--samp-ratio 1|2|4` can investigate a
-bench-observed rate; it does not validate phase. A candidate rate far from
-128 sps cannot become ready. Measured panes use nominal launch-relative timing
-until a fit is ready, then candidate timing; both share the MCU domain. Their
-historical fit is retained if anchors become stale; the derived pane is disabled.
+## E2 records and recording provenance
 
-Common-grid summation uses only overlapping, bracketing valid samples. Linear
-interpolation never crosses settling/missing positions, epochs or resets and
-never extrapolates. No lead is normalized or inverted before addition. Settling
-tags consume sequence/time positions and plot as NaN. Tags6/7/reserved are not
-voltages. FIFO/timing/transport/PLL faults stop both boards and start a fresh
-epoch after reporting the loss. A mode change also clears both fits/history.
-
-At 128 sps, linear interpolation's curvature bound is max|x''| * T^2 / 8.
-For a sine the maximum midpoint relative error is 1-cos(pi*f/128): about 0.75%
-at 5 Hz and 23% at 28.35 Hz. A timing objective of 1 ms does not imply accurate
-amplitude reconstruction across the full filter passband. No clinical claim.
-History is bounded to 1280 positions/board; the rolling view is five seconds.
-FIFO batching adds about 62.5 ms; common-grid rendering waits for both brackets,
-and GUI redraws every100 ms. OS/USB stalls are not bounded; host silence is
-reported after two seconds normally, or five seconds during fault recovery,
-which includes board reconfiguration. The derived pane is cleared when invalid.
-
-## E2 wire protocol (ASCII, newline terminated, 115200 baud)
-
-All integers are decimal except chip ID/status hex. s = random boot session,
-e = global acquisition epoch, b = board1/2. Event board0 means global. Epoch0
-is allowed for pre-acquisition events. Board1 is I; Board2 is III.
+ASCII newline-terminated records, 115200 baud. s=session, e=epoch, b=physical board.
 
     E2,C,s,e,b,mode,chip_hex,launch_us,ratio,latency_ticks,association_valid
     E2,R,s,e,mode
     E2,D,s,e,b,first_sequence,value:tag;value:tag;...
-    E2,A,s,e,b,pulse_count,esp_timestamp_us
-    E2,S,s,e,b,status_hex,pulse_count,irq_lost,tx_lost
+    E2,A,s,e,b,timing_position,esp_timestamp_us
+    E2,S,s,e,b,status_hex,irq_count,irq_lost,tx_lost
     E2,E,s,e,b,event_code,esp_timestamp_us
+    E2,T,s,e,b,irq_count,esp_timestamp_us,interval_us,fifo_read_count,irq_lost
 
-C is emitted only after both configurations/readbacks succeed; R confirms both.
-Version2 fixes the register/rate/units above. D batches up to eight signed raw
-values with ETAG; tags0/2 valid, 1/3 settling, 2/3 end-of-FIFO. Sequence counts
-all0..3 entries from zero, including settling. A counters count observed SAMP
-edges, not FIFO entries. Status loss counts are per epoch. Reset/loss events
-invalidate association; data cannot repair it until a fresh C/C/R epoch.
-Unknown/malformed records invalidate alignment; old-session/epoch records are
-ignored. Parser capacity is1024 bytes/line with drop-until-newline recovery.
-Old ECG:value/unknown versions raise an upload/version error. CSV stores exact
-wire bytes as hex plus readable text, with units/options metadata, so malformed
-input and fragmentation replay identically. Recordings are never overwritten.
+Associated FIFO anchors use ratio 1 and `timing_position = sample_index + 1`.
+Legacy association 0 A records retain their SAMP-counter interpretation and ratio.
+S/T IRQ callback counts are diagnostics, not A sample positions. T is bounded
+context around a timing fault and never repairs or substitutes an anchor.
 
-Transport budget (8N1 conservative UART equivalent =11,520 bytes/s): D lines
-about 130 bytes at 32 batches/s, A about 70 bytes at 8/s across both boards at the
-observed 128-edge/s rate, S about 90 bytes at 2/s: roughly 4,900 bytes/s. Allowing 2%
-rate variation plus configuration/fault reporting stays below 6,000 bytes/s,
-with over 45% margin. This excludes adversarial command spam; warnings are throttled
-and queue exhaustion is an explicit fault. USB throughput is not assumed as a
-reason to ignore that budget. The fixed32-line TX ring is pumped only into
-available USB space; partial lines finish before dropping queued records.
+D preserves signed18-bit ECG voltage and ETAG. Tags0/2 are valid voltage;
+1/3 consume time positions but display as gaps. Empty, overflow and reserved
+tags are never voltage samples. C/C/R requires both matching configurations
+and successful identity/register readback. Parser errors, losses, stale clocks
+or data and incomplete recording endings remain explicit capture failures.
 
-## Manual acceptance
+CSV retains exact wire bytes plus options metadata. New captures save the
+physical-to-logical lead mapping and bias board. Replay restores those values;
+recordings lacking mapping show neutral board labels unless explicitly overridden.
+Historical files are never silently assigned today's swapped labels.
 
-Completed: both boards identified/configured; smooth measured I/III internal-test
-plots and a clean 120-second recording and replay (15,496/15,488 valid samples, no gaps,
-acquisition faults or queue losses). Reopening after serial monitoring and plotting
-also worked. SAMP fits were about 128 Hz; FIFO phase remains unvalidated.
-Remaining checks:
+## Bench acceptance: 2026-11-16
 
-1. Run Format -> Check -> Build -> Unit Tests; close port users, manually Upload,
-   then record internal mode 0 for a longer run and replay it. Check missing-board
-   behavior. Internal phases may differ.
-2. Scope D2/D3 against common circuit GND, with no person connected. Measure
-   falling-edge rate and pulse width. Compare counts with FIFO sequence increments
-   over known intervals. Capture SYNCH/CS, timing edges and sample availability
-   with a logic analyzer if available. Repeat startup and every recovery type.
-   Establish ratio, first-edge numbering and first-FIFO phase; reject missing
-   pulses. The exact uncertainty left by filter startup must be bounded.
-3. With NO person attached, use reviewed small-signal amplitude/common-mode
-   wiring to feed identical signals to both channels. Do not ground VCM or
-   parallel two VCM outputs. Use a non-repeating edge pattern or multi-frequency
-   waveform; a single periodic sine cannot disambiguate whole-cycle offsets.
-4. Record at least10minutes. Verify channel polarity/gain, uncorrected offset,
-   relative drift, fit residuals, waveform overlay error, and corrected timing
-   against the known stimulus. Record mean/RMS/max error and uncertainty across
-   tested frequencies. Evaluate the proposed <=1ms relative target; it is not
-   already passed. Compare amplitude error separately from timing error.
-5. Investigate candidate sum only after association checks: identical inputs
-   should overlay and II should equal twice the input within measured front-end,
-   noise, gain and interpolation limits. Deliberately interrupt a timing/input
-   path off-body; verify explicit gap/fault, no stale sum, and clean reconvergence.
-6. Only under a separately reviewed body-connected safety setup, verify the
-   second cable mapping and single-RL/shared-LA common-mode behavior. Direct USB,
-   a battery laptop, or a good-looking waveform does not establish patient safety.
+Format, Check Syntax, all 72 unit tests and the pinned Nano ESP32 Build passed.
+The FIFO-anchor firmware was uploaded with permission. The working plug layout
+above was retained; generator B supplied 5 Hz while A supplied 3 Hz, then 11 Hz.
+Both used 20 mVpp, +650 mV offset and High Z, with no person connected.
 
-Automated synthetic results validate software against assumed clock truth only;
-they do not establish physical sample association, electrode safety or
-physiological Lead II accuracy.
+| Capture | Duration | Valid samples, B1 / B2 | Result |
+| --- | --- | --- | --- |
+| `fifo-internal-final-20261116T224813Z.csv` | 20 s | 2568 / 2560 | Both internal periods 128 samples |
+| `fifo-external-3hz-final-20261116T224912Z.csv` | 30 s | 3848 / 3840 | Worst steady 2 s-window relative delay 0.467 ms |
+| `fifo-external-11hz-long-20261116T225100Z.csv` | 600 s | 76800 / 76808 | All 299 steady windows below 1 ms; worst 0.533 ms |
+| `fifo-external-11hz-reopen-20261116T230131Z.csv` | 20 s | 2568 / 2560 | Fresh start healthy; worst steady delay 0.508 ms |
+
+All four captures and shared-task replays had no missing positions, acquisition
+faults, parser errors or incomplete endings. Calculated II worked without the
+exploratory override. The eight-sample difference at a recording boundary is
+ordinary staggered batching, not a missing-data event. Raw CSVs and analysis
+JSON/PNGs are saved in ignored `recordings/`.
+
+Timing figures compare the sign-corrected shared generator component after the
+first 2 s of filter startup. They measure this setup's relative waveform delay,
+including analog-path differences; they are not absolute timestamp calibration
+or proof across the entire filter passband. Earlier SAMP recordings retain
+their original unvalidated association and any recorded faults.
+
+Human-connected testing requires a separately reviewed electrical safety setup;
+direct USB is not patient isolation. Deliberate hardware fault injection and
+body-connected performance were not part of this bench acceptance.

@@ -2,8 +2,11 @@
 
 C: mode,chip_hex,launch_us,pulse_ratio,latency_ticks,association_valid
 R: mode; D: first_sequence,value:tag;value:tag;...
-A: pulse_count,time_us; S: status_hex,pulse_count,irq_lost,tx_lost
+A: timing_position,time_us; S: status_hex,irq_count,irq_lost,tx_lost
 E: event_code,time_us. Times use the MCU clock; values are raw ADC counts.
+T: irq_count,time_us,interval_us,fifo_read_count,irq_lost (diagnostic only).
+Associated FIFO anchors use one-based sample positions in A. Legacy SAMP
+positions retain their advertised ratio and unvalidated association flag.
 """
 
 from dataclasses import dataclass
@@ -93,6 +96,14 @@ def parse_line(line):
                 integer(rest[1]),
                 integer(rest[2], high=0xFFFFFFFF),
                 integer(rest[3], high=0xFFFFFFFF),
+            )
+        elif kind == "T" and len(rest) == 5:
+            fields = (
+                integer(rest[0], 1),
+                integer(rest[1]),
+                integer(rest[2], -(1 << 63)),
+                integer(rest[3]),
+                integer(rest[4], high=0xFFFFFFFF),
             )
         elif kind == "E" and len(rest) == 2:
             if (

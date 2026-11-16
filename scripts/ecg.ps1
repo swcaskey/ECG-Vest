@@ -10,7 +10,7 @@ param(
     [string]$RecordPath = "",
 
     [ValidateRange(1, 1000000)]
-    [double]$Range = 8000,
+    [double]$Range,
 
     [switch]$Headless,
 
@@ -280,7 +280,10 @@ try {
             $env:ECG_PORT = $SelectedPort
             Write-Host "Opening graph on $SelectedPort"
 
-            $plotArguments = @((Join-Path $ProjectRoot "plot_ecg.py"), "--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
+            $plotArguments = @((Join-Path $ProjectRoot "plot_ecg.py"))
+            if ($PSBoundParameters.ContainsKey("Range")) {
+                $plotArguments += @("--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
+            }
             if ($RecordPath) { $plotArguments += @("--record", $RecordPath) }
             if ($Headless) { $plotArguments += "--headless" }
             if ($AllowUnvalidatedTiming) { $plotArguments += "--allow-unvalidated-timing" }
@@ -303,7 +306,10 @@ try {
             if (-not (Test-Path -LiteralPath $SelectedRecording -PathType Leaf)) {
                 throw "Provide an existing CSV recording with -RecordingPath."
             }
-            $replayArguments = @((Join-Path $ProjectRoot "plot_ecg.py"), "--replay", $SelectedRecording, "--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
+            $replayArguments = @((Join-Path $ProjectRoot "plot_ecg.py"), "--replay", $SelectedRecording)
+            if ($PSBoundParameters.ContainsKey("Range")) {
+                $replayArguments += @("--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
+            }
             if ($Headless) { $replayArguments += "--headless" }
             if ($AllowUnvalidatedTiming) { $replayArguments += "--allow-unvalidated-timing" }
             Invoke-Checked $Python $replayArguments

@@ -3,9 +3,10 @@
 Arduino Nano ESP32 firmware and a Python live graph for two MAX30003WING boards
 over USB serial using the E2 protocol at 115200 baud. The graph shows measured
 Lead I and Lead III, plus estimated Lead II, in ADC counts over a rolling
-five-second window at 128 samples/s.
+five-second window at 128 samples/s. Lead II = I + III. Plots scale automatically;
+timing or data faults disable the calculated lead.
 
-Choose `0` for both boards' internal 1 Hz test signals or `1` for electrodes:
+Choose `0` for internal 1 Hz signals or `1` for electrode/bench inputs:
 
 - **Live Plot** prompts in the terminal; Enter defaults to `0`.
 - **Serial Monitor** prompts for `0` or `1` at startup.
@@ -13,8 +14,10 @@ Choose `0` for both boards' internal 1 Hz test signals or `1` for electrodes:
 Acquisition waits for a selection. To change modes, reopen Live Plot or Serial
 Monitor; no rebuild is needed after the initial upload.
 
-Electrode cable: red = ECGP (+), blue = ECGN (-), black = VCM body bias, not ground.
-Use Board 1's black lead for body bias; keep Board 2's black lead insulated.
+Current plugs: Board 2 measures I (LA - RA); Board 1 measures III (LL - LA).
+Red = ECGP (+), blue = ECGN (-), black = VCM body bias, not ground.
+RL uses Board 2's VCM; keep the unused black electrode isolated. Recordings retain
+their lead mapping for replay.
 
 Human-connected testing requires a separately reviewed electrical safety setup;
 the direct laptop USB connection is not a patient-isolation barrier.
@@ -39,8 +42,8 @@ Open **Terminal > Run Task**. Run tasks 1–4 before committing.
 | `ECG: 6. List Boards` | List connected boards and ports. |
 | `ECG: 7. Serial Monitor` | Choose a mode at startup and view serial output. |
 | `ECG: 8. Live Plot` | Show live graphs; choose mode `0` or `1`. |
-| `ECG: 9. Start Recording` | Name a CSV and plot while saving data to `recordings/`. |
-| `ECG: 10. Replay Recording` | Select a saved recording by number and graph it. |
+| `ECG: 9. Start Recording` | Name a CSV in `recordings/`; close the graph to stop and save. |
+| `ECG: 10. Replay Recording` | Select a recording by number; replay with completion and health results. |
 | `ECG: * Setup Environment` | Install the board core and development dependencies. |
 
 Close the serial monitor or plot before uploading. Only one application should
@@ -63,5 +66,5 @@ libraries, or build configuration.
 When changing tools or dependencies, update the appropriate configuration,
 rerun setup, and verify formatting, syntax checks, and compilation.
 
-Do not commit generated environments, build output, or Python cache files.
-These are excluded through `.gitignore`.
+Keep recordings locally in `recordings/`. Recordings, generated environments,
+build output and Python caches are excluded through `.gitignore`.

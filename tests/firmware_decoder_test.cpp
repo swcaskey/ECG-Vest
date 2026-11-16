@@ -41,6 +41,32 @@ int main() {
   }
   assert(positions == 3 && valid == 1);
 
+  // EINT identifies the eighth unread position, independent of callback count.
+  FifoAnchorState fifoTiming;
+  FifoThresholdEdge threshold = fifoTiming.edge();
+  assert(threshold.position == 8 && fifoAnchorMatches(threshold, 0));
+  assert(!fifoAnchorMatches(threshold, 1));
+  fifoTiming.beginDrain();
+  assert(fifoTiming.edge().duringDrain);
+  for (unsigned i = 0; i < 8; ++i) {
+    assert(fifoTiming.completeRead() == i + 1);
+  }
+  threshold = fifoTiming.edge();
+  assert(threshold.position == 16 && !fifoAnchorMatches(threshold, 8));
+  fifoTiming.endDrain();
+  assert(fifoAnchorMatches(fifoTiming.edge(), 8));
+  // A stalled service can drain backlog without inventing intervening edges.
+  fifoTiming.beginDrain();
+  for (unsigned i = 0; i < 24; ++i) {
+    fifoTiming.completeRead();
+  }
+  fifoTiming.endDrain();
+  threshold = fifoTiming.edge();
+  assert(threshold.position == 40 && fifoAnchorMatches(threshold, 32));
+  assert(!fifoAnchorMatches(threshold, 16));
+  fifoTiming.reset();
+  assert(fifoAnchorMatches(fifoTiming.edge(), 0));
+
   ModeCommand command;
   assert(command.feed('\n') == -1); // No automatic start on a blank line.
   assert(command.feed('1') == -1);  // Fragmented command waits for newline.
@@ -59,5 +85,86 @@ int main() {
   assert(command.feed('1') == -1);
   assert(command.feed('\t') == -1);
   assert(command.feed('\n') == 1); // Invalid input does not poison next line.
+
+  // A new USB client must not inherit an unfinished or invalid command.
+  assert(command.feed('1') == -1);
+  command.reset();
+  assert(command.feed('0') == -1);
+  assert(command.feed('\n') == 0);
+  assert(command.feed('x') == -1);
+  command.reset();
+  assert(command.feed('1') == -1);
+  assert(command.feed('\n') == 1);
+
+  const char *timingFaults[] = {"TIMING_STALE",
+                                "TIMING_COUNT",
+                                "TIMING_STARTUP",
+                                "TIMING_MISSED",
+                                "TIMING_GLITCH_D181_P7813_R7812",
+                                "TIMING_DRAIN_OVERLAP",
+                                "TIMING_DUPLICATE_IRQ",
+                                "TIMING_THRESHOLD_ABSENT",
+                                "TIMING_IRQ_MISSING",
+                                "IRQ_QUEUE_OVERFLOW"};
+  for (const char *code : timingFaults) {
+    assert(timingOnlyFault(code));
+  }
+  const char *acquisitionFaults[] = {
+      "FIFO_OVERFLOW",     "PLL_UNLOCK", "DATA_STALE",     "RESERVED_TAG",
+      "TX_QUEUE_OVERFLOW", "CHIP_ID",    "CONFIG_READBACK"};
+  for (const char *code : acquisitionFaults) {
+    assert(!timingOnlyFault(code));
+  }
+  assert(!timingOnlyFault(nullptr));
+
+  TimingContext context;
+  assert(sizeof(context) <= 9 * sizeof(TimingDiagnostic) + 16);
+  for (uint64_t pulse = 1; pulse <= 10; ++pulse) {
+    context.observe({pulse, int64_t(pulse * 1000), 1000, pulse * 8, 0});
+  }
+  const TimingDiagnostic shortEdge = {11, 10181, 181, 80, 0};
+  assert(context.begin(&shortEdge));
+  assert(!context.begin(&shortEdge)); // One bounded window per epoch.
+  assert(context.size() == 5 && !context.complete());
+  TimingDiagnostic observed = {};
+  assert(context.pop(observed) && observed.pulseCount == 7);
+  for (uint64_t pulse = 12; pulse <= 15; ++pulse) {
+    context.observe({pulse, int64_t(pulse * 1000), 1000, pulse * 8, 0});
+  }
+  assert(context.complete() && context.size() == 9);
+  for (uint64_t pulse = 16; pulse < 5000; ++pulse) {
+    context.observe({pulse, int64_t(pulse * 1000), 1000, pulse * 8, 0});
+  }
+  assert(context.size() == 9); // Later edges cannot overwrite the evidence.
+  for (uint64_t pulse = 8; pulse <= 15; ++pulse) {
+    assert(context.pop(observed) && observed.pulseCount == pulse);
+    if (pulse == 11) {
+      assert(observed.time == 10181 && observed.interval == 181);
+      assert(observed.fifoReads == 80 && observed.irqLost == 0);
+    }
+  }
+  assert(!context.pop(observed));
+
+  context.reset();
+  context.observe({1, 1000, 0, 0, 0});
+  assert(context.begin(nullptr)); // Stale timing has no observed fault edge.
+  for (uint64_t pulse = 2; pulse <= 5; ++pulse) {
+    context.observe({pulse, int64_t(pulse * 1000), 1000, pulse * 8, 0});
+  }
+  assert(context.complete() && context.size() == 5);
+  for (uint64_t pulse = 1; pulse <= 5; ++pulse) {
+    assert(context.pop(observed) && observed.pulseCount == pulse);
+  }
+  assert(!context.pending());
+
+  context.reset();
+  const TimingDiagnostic lostEdge = {129, 10000, -2, 32, 1};
+  assert(context.begin(&lostEdge));
+  context.stopPost(); // Queue overflow stops capture immediately.
+  context.observe({130, 11000, 1000, 40, 2});
+  assert(context.complete() && context.size() == 1);
+  assert(context.pop(observed) && observed.pulseCount == 129);
+  assert(observed.interval == -2 && observed.irqLost == 1);
+  assert(!context.pop(observed));
   return 0;
 }

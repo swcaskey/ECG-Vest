@@ -1,6 +1,6 @@
-"""Fit SAMP clocks and interpolate valid samples without bridging gaps.
+"""Fit sample-index anchors and interpolate without bridging invalid positions.
 
-FIFO-to-pulse phase is unvalidated; a good clock fit alone cannot enable Lead II.
+The acquisition layer separately checks firmware's FIFO-index association.
 """
 
 from bisect import bisect_left
@@ -10,10 +10,10 @@ from statistics import median
 
 
 class ClockModel:
-    """Fit MCU microseconds against each board's SAMP pulse numbers.
+    """Fit MCU microseconds against one-based timing positions.
 
-    Ratio comes from firmware; observed SAMP/FIFO rate is 1, phase unvalidated.
-    LPF latency: 4906 master-clock ticks at 128 sps (p19 Table 4).
+    Associated FIFO-threshold anchors use ratio 1; legacy SAMP records keep
+    their advertised ratio. LPF delay is 4906 master-clock ticks at 128 sps.
     """
 
     def __init__(self, ratio=4, latency_ticks=4906):
@@ -96,8 +96,7 @@ class ClockModel:
         self.residual_us = sqrt(
             fsum((t - self._predict_pulse(p)) ** 2 for p, t in inliers) / len(inliers)
         )
-        # Engineering quality gate, separate from the unproven pulse/FIFO
-        # association: low residuals alone still do not validate sample phase.
+        # Clock-fit quality and sample-index association are separate checks.
         self._fit_ready = (
             len(inliers) >= 8
             and inliers[-1][1] - inliers[0][1] >= 500_000
@@ -107,7 +106,8 @@ class ClockModel:
     def add(self, pulse, time_us):
         """Accept a valid timing anchor; return False when rejected.
 
-        Pulse numbers preserve batching gaps; the MCU detects missing GPIO edges.
+        Explicit positions preserve batching gaps; source association is checked
+        separately, so a good fit cannot validate legacy SAMP/FIFO phase.
         """
         accepted = self._add(pulse, time_us)
         self._quality.append(accepted)
@@ -156,7 +156,8 @@ class ClockModel:
     def time_us(self, sample_index):
         """Estimate input time for FIFO position n, including settling entries.
 
-        Assumes pulse ratio*(n+1), minus LPF delay; startup phase is UNVALIDATED.
+        Associated anchors identify ratio*(n+1); subtract the configured LPF
+        delay. Legacy source association remains the acquisition layer's gate.
         """
         if not self.ready:
             raise ValueError("Clock model is not ready")

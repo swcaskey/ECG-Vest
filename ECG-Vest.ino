@@ -6,7 +6,8 @@
 
 // USB mode for both boards: 0 = internal test, 1 = external inputs.
 // Shared SPI: D13 SCK, D11 MOSI, D12 MISO; common 3V3/GND.
-// Independent clocks: SAMP-to-FIFO timing still needs bench validation.
+// FIFO threshold edges provide indexed timing; physical precision needs a bench
+// check.
 enum class InputMode { InternalTest, Electrodes };
 
 constexpr size_t BOARD_COUNT = 2;
@@ -18,16 +19,17 @@ constexpr uint32_t CNFG_GEN_VALUE =
     0x080004; // ECG on; lead bias/off detection off.
 constexpr uint32_t CNFG_ECG_VALUE =
     0x805000; // 128 sps, gain 20, HP/LP enabled.
-// Rev 3 pp. 27-29: dedicated active-low SAMP, self-clear, every base instant.
-// EINT/EOVF/PLL are polled: a persistent interrupt must not hide timing edges.
+// Rev 3 pp. 26-29: EINT stays low until fewer than eight records remain.
+// Each clean falling edge identifies the eighth unread FIFO position.
 constexpr uint32_t EN_INT_VALUE =
-    0x000201; // CMOS drive on each dedicated wire.
-constexpr uint32_t MNGR_INT_VALUE = 0x380004; // EFIT = 8, CLR_SAMP = 1.
+    0x800001; // Dedicated EINT, active-low CMOS; SAMP is not routed.
+constexpr uint32_t MNGR_INT_VALUE = 0x380004; // EFIT = 8; SAMP is not routed.
 const SPISettings MAX_SPI(1000000, MSBFIRST, SPI_MODE0);
 
 struct PulseEvent {
   uint64_t count;
   int64_t time;
+  FifoThresholdEdge fifo;
 };
 
 struct TimingCapture {
@@ -38,6 +40,7 @@ struct TimingCapture {
   volatile uint32_t lost = 0;
   volatile int64_t last = 0;
   volatile bool armed = false;
+  FifoAnchorState fifo;
 };
 
 struct Board {
@@ -51,8 +54,16 @@ struct Board {
   int64_t lastInterval = 0;
   int64_t lastDataTime = 0;
   double pulsePeriod = 0;
-  int64_t startupIntervals[16] = {};
-  uint8_t startupCount = 0;
+  uint32_t anchorsSeen = 0;
+  uint64_t lastAnchorPosition = 0;
+  int64_t lastAnchorTime = 0;
+  bool pendingEdge = false;
+  PulseEvent thresholdEdge = {};
+  TimingDiagnostic thresholdDiagnostic = {};
+  bool timingDegraded = false;
+  bool irqOverflowReported = false;
+  bool interruptDetached = false;
+  TimingContext timingContext;
 
   Board(uint8_t csPin, uint8_t interruptPin)
       : cs(csPin), interrupt(interruptPin) {}
@@ -64,7 +75,7 @@ struct TxLine {
   uint16_t offset = 0;
 };
 
-// Pins are {CS, INTB}: Board 1 = Lead I; Board 2 = Lead III.
+// Pins are {CS, INTB}: Board 1 = Lead III; Board 2 = Lead I (current cables).
 Board boards[BOARD_COUNT] = {{D10, D2}, {D9, D3}};
 TimingCapture captures[BOARD_COUNT];
 portMUX_TYPE captureMux = portMUX_INITIALIZER_UNLOCKED;
@@ -76,13 +87,14 @@ uint32_t session = 0;
 uint32_t epoch = 0;
 bool running = false;
 bool serialWasConnected = false;
+bool usbDisconnectPending = false; // Protected by captureMux.
+ModeCommand inputCommand;
 InputMode inputMode = InputMode::InternalTest;
 int64_t launchTime = 0;
 int64_t lastPoll = 0;
 int64_t lastStatus = 0;
 int64_t retryAfter = 0;
 const char *fault = nullptr;
-char timingFault[48];
 uint8_t faultBoard = 0;
 
 uint32_t readRegister(const Board &board, uint8_t address) {
@@ -123,6 +135,7 @@ void ARDUINO_ISR_ATTR capturePulse(void *argument) {
     } else {
       capture.events[capture.head].count = count;
       capture.events[capture.head].time = now;
+      capture.events[capture.head].fifo = capture.fifo.edge();
       capture.head = next;
     }
   }
@@ -150,21 +163,52 @@ void disarmTiming() {
   portEXIT_CRITICAL(&captureMux);
 }
 
-void setFault(uint8_t board, const char *code) {
-  if (!fault) {
-    fault = code;
-    faultBoard = board;
+void disarmBoardTiming(size_t index) {
+  portENTER_CRITICAL(&captureMux);
+  captures[index].armed = false;
+  captures[index].tail = captures[index].head;
+  portEXIT_CRITICAL(&captureMux);
+  if (!boards[index].interruptDetached) {
+    detachInterrupt(boards[index].interrupt);
+    boards[index].interruptDetached = true;
   }
 }
 
-void setTimingFault(size_t index, const char *code, int64_t interval) {
+void onUsbDisconnect(void *, esp_event_base_t, int32_t, void *) {
+  // The USB event task only marks the loss; the main loop owns SPI cleanup.
+  portENTER_CRITICAL(&captureMux);
+  usbDisconnectPending = true;
+  portEXIT_CRITICAL(&captureMux);
+}
+
+bool serialClientActive() {
+  portENTER_CRITICAL(&captureMux);
+  const bool disconnected = usbDisconnectPending;
+  portEXIT_CRITICAL(&captureMux);
+  return Serial && !disconnected;
+}
+
+bool waitForSerialClient(uint32_t milliseconds) {
+  for (uint32_t elapsed = 0; elapsed < milliseconds; elapsed += 10) {
+    if (!serialClientActive()) {
+      return false;
+    }
+    delay(milliseconds - elapsed < 10 ? milliseconds - elapsed : 10);
+  }
+  return serialClientActive();
+}
+
+void markTimingFault(size_t index, const char *code,
+                     const TimingDiagnostic *edge);
+
+void setFault(uint8_t board, const char *code) {
+  if (board >= 1 && board <= BOARD_COUNT && timingOnlyFault(code)) {
+    markTimingFault(board - 1, code, nullptr);
+    return;
+  }
   if (!fault) {
-    // D=current, P=previous, R=reference interval, all in microseconds.
-    snprintf(timingFault, sizeof(timingFault), "%s_D%lld_P%lld_R%ld", code,
-             static_cast<long long>(interval),
-             static_cast<long long>(boards[index].lastInterval),
-             static_cast<long>(boards[index].pulsePeriod));
-    setFault(index + 1, timingFault);
+    fault = code;
+    faultBoard = board;
   }
 }
 
@@ -187,7 +231,7 @@ bool enqueueLine(const char *text) {
 void pumpSerial() {
   // Never block acquisition; a full TX queue triggers recovery.
   for (size_t i = 0; i < 4 && txTail != txHead; ++i) {
-    if (!Serial) {
+    if (!serialClientActive()) {
       return;
     }
     const int available = Serial.availableForWrite();
@@ -223,11 +267,46 @@ void emitEvent(uint8_t board, const char *code) {
   enqueueLine(line);
 }
 
+void markTimingFault(size_t index, const char *code,
+                     const TimingDiagnostic *edge) {
+  Board &board = boards[index];
+  const bool first = board.timingContext.begin(edge);
+  const bool overflow = strcmp(code, "IRQ_QUEUE_OVERFLOW") == 0;
+  board.timingDegraded = true;
+  board.pendingEdge = false;
+  if (first || (overflow && !board.irqOverflowReported)) {
+    emitEvent(index + 1, code);
+  }
+  if (overflow) {
+    board.irqOverflowReported = true;
+    board.timingContext.stopPost();
+    disarmBoardTiming(index);
+  }
+}
+
+void emitTimingContext(size_t index) {
+  // Keep space for ECG/status/fault records; one diagnostic per board per pass.
+  const size_t free = (txTail + TX_CAPACITY - txHead - 1) % TX_CAPACITY;
+  TimingDiagnostic entry;
+  if (free < 8 || !boards[index].timingContext.pop(entry)) {
+    return;
+  }
+  char line[LINE_CAPACITY];
+  snprintf(line, sizeof(line), "E2,T,%lu,%lu,%u,%llu,%lld,%lld,%llu,%lu\n",
+           static_cast<unsigned long>(session),
+           static_cast<unsigned long>(epoch), unsigned(index + 1),
+           static_cast<unsigned long long>(entry.pulseCount),
+           static_cast<long long>(entry.time),
+           static_cast<long long>(entry.interval),
+           static_cast<unsigned long long>(entry.fifoReads),
+           static_cast<unsigned long>(entry.irqLost));
+  enqueueLine(line);
+}
+
 bool readInputMode(InputMode &mode) {
-  static ModeCommand command;
   static int64_t lastInvalidMode = -1000000;
   for (size_t i = 0; i < 64 && Serial.available() > 0; ++i) {
-    const int selection = command.feed(Serial.read());
+    const int selection = inputCommand.feed(Serial.read());
     if (selection == -2) {
       const int64_t now = esp_timer_get_time();
       if (now - lastInvalidMode >= 1000000) {
@@ -265,7 +344,13 @@ bool configureBoard(size_t index, InputMode mode) {
   board.lastPulseTime = 0;
   board.lastInterval = 0;
   board.pulsePeriod = 0;
-  board.startupCount = 0;
+  board.anchorsSeen = 0;
+  board.lastAnchorPosition = 0;
+  board.lastAnchorTime = 0;
+  board.pendingEdge = false;
+  board.timingDegraded = false;
+  board.irqOverflowReported = false;
+  board.timingContext.reset();
   return true;
 }
 
@@ -300,8 +385,15 @@ bool startAcquisition(InputMode mode) {
       0; // Loss counters belong to the new epoch; prior loss has an E record.
   for (size_t i = 0; i < BOARD_COUNT; ++i) {
     writeRegister(boards[i], 0x08, 0);
+    if (boards[i].interruptDetached) {
+      attachInterruptArg(boards[i].interrupt, capturePulse,
+                         reinterpret_cast<void *>(i + 1), FALLING);
+      boards[i].interruptDetached = false;
+    }
   }
-  delay(100);
+  if (!waitForSerialClient(100)) {
+    return false;
+  }
   bool configured = true;
   for (size_t i = 0; i < BOARD_COUNT; ++i) {
     if (!configureBoard(i, mode)) {
@@ -311,11 +403,15 @@ bool startAcquisition(InputMode mode) {
   if (!configured) {
     return false;
   }
-  delay(1000);
+  if (!waitForSerialClient(1000)) {
+    return false;
+  }
   for (size_t i = 0; i < BOARD_COUNT; ++i) {
     readRegister(boards[i], 0x01);
   }
-  delay(20);
+  if (!waitForSerialClient(20)) {
+    return false;
+  }
   for (size_t i = 0; i < BOARD_COUNT; ++i) {
     boards[i].status = readRegister(boards[i], 0x01);
     if (boards[i].status & (1UL << 8)) {
@@ -326,6 +422,10 @@ bool startAcquisition(InputMode mode) {
     if (!verifyBoard(i)) {
       return false;
     }
+  }
+
+  if (!serialClientActive()) {
+    return false;
   }
 
   // Write-only common SYNCH: independent FCLKs still determine launch phase.
@@ -352,15 +452,31 @@ bool startAcquisition(InputMode mode) {
     capture.count = 0;
     capture.lost = 0;
     capture.last = 0;
+    capture.fifo.reset();
     capture.armed = true;
   }
   portEXIT_CRITICAL(&captureMux);
+  // Eight new records need over 50 ms; never accept an already-low launch.
+  if (esp_timer_get_time() - launchTime > 50000) {
+    setFault(0, "TIMING_ARMING_WINDOW");
+    return false;
+  }
+  for (size_t i = 0; i < BOARD_COUNT; ++i) {
+    if (digitalRead(boards[i].interrupt) == LOW) {
+      setFault(i + 1, "TIMING_STARTUP_LEVEL");
+      return false;
+    }
+  }
+  if (!serialClientActive()) {
+    disarmTiming();
+    return false;
+  }
   char line[LINE_CAPACITY];
   for (size_t i = 0; i < BOARD_COUNT; ++i) {
-    // Bench anchors show 128 SAMP edges/s at 128 sps: ratio 1.
-    // 4906 master-clock input ticks = LPF latency (Table 4, p. 19).
-    // Association=0: first SAMP edge to FIFO index phase needs bench evidence.
-    snprintf(line, sizeof(line), "E2,C,%lu,%lu,%u,%u,%06lX,%lld,1,4906,0\n",
+    // A positions come directly from FIFO threshold crossings, not SAMP counts.
+    // 4906 input ticks = LPF latency (Table 4); precision still needs bench
+    // checks.
+    snprintf(line, sizeof(line), "E2,C,%lu,%lu,%u,%u,%06lX,%lld,1,4906,1\n",
              static_cast<unsigned long>(session),
              static_cast<unsigned long>(epoch), unsigned(i + 1),
              mode == InputMode::InternalTest ? 0 : 1,
@@ -380,74 +496,117 @@ bool startAcquisition(InputMode mode) {
 
 void processTiming(size_t index) {
   Board &board = boards[index];
+  if (board.timingDegraded && board.timingContext.complete()) {
+    return;
+  }
   uint32_t lost;
   int64_t last;
+  uint64_t count;
+  bool queued;
+  bool draining;
   portENTER_CRITICAL(&captureMux);
   lost = captures[index].lost;
   last = captures[index].last;
+  count = captures[index].count;
+  queued = captures[index].head != captures[index].tail;
+  draining = captures[index].fifo.isDraining();
   portEXIT_CRITICAL(&captureMux);
   if (lost) {
-    setFault(index + 1, "IRQ_QUEUE_OVERFLOW");
+    // Latest ISR observation, not an invented timestamp for the lost entry.
+    const TimingDiagnostic edge = {
+        count, last, board.lastPulseCount ? last - board.lastPulseTime : 0,
+        board.sequence, lost};
+    markTimingFault(index, "IRQ_QUEUE_OVERFLOW", &edge);
     return;
   }
   const int64_t now = esp_timer_get_time();
-  if (now - (last ? last : launchTime) > 100000) {
+  const double period = board.pulsePeriod ? board.pulsePeriod : 7812.5;
+  // Backlog drains can legitimately skip threshold edges; predict from reads.
+  const int64_t nextExpected =
+      board.lastAnchorPosition
+          ? board.lastAnchorTime + int64_t((board.sequence + FIFO_THRESHOLD -
+                                            board.lastAnchorPosition) *
+                                           period)
+          : launchTime + int64_t(FIFO_THRESHOLD * period);
+  if (!board.timingDegraded && !board.pendingEdge && !queued && !draining &&
+      now > nextExpected + 50000) {
     setFault(index + 1, "TIMING_STALE");
-    return;
   }
   PulseEvent event;
   for (size_t i = 0; i < 32 && popPulse(index, event); ++i) {
-    if (board.lastPulseCount) {
-      const int64_t interval = event.time - board.lastPulseTime;
-      if (event.count != board.lastPulseCount + 1 || interval <= 0) {
-        setFault(index + 1, "TIMING_COUNT");
-        return;
+    const int64_t interval =
+        board.lastPulseCount ? event.time - board.lastPulseTime : 0;
+    // Diagnostic FIFO progress when serviced by main; A uses the ISR snapshot.
+    const TimingDiagnostic edge = {event.count, event.time, interval,
+                                   board.sequence, lost};
+    bool faultEdge = false;
+    if (!board.timingDegraded) {
+      if (board.lastPulseCount &&
+          (event.count != board.lastPulseCount + 1 || interval <= 0)) {
+        markTimingFault(index, "TIMING_COUNT", &edge);
+        faultEdge = true;
+      } else if (event.fifo.duringDrain) {
+        markTimingFault(index, "TIMING_DRAIN_OVERLAP", &edge);
+        faultEdge = true;
+      } else if (board.pendingEdge) {
+        // EINT cannot fall twice without intervening FIFO reads.
+        board.timingContext.observe(board.thresholdDiagnostic);
+        markTimingFault(index, "TIMING_DUPLICATE_IRQ", &edge);
+        faultEdge = true;
+      } else {
+        board.pendingEdge = true;
+        board.thresholdEdge = event;
+        board.thresholdDiagnostic = edge;
       }
-      // The actual SAMP rate is measured, not assumed to equal FIFO rate.
-      if (board.startupCount < 16) {
-        board.startupIntervals[board.startupCount++] = interval;
-        if (board.startupCount == 16) {
-          int64_t sorted[16];
-          memcpy(sorted, board.startupIntervals, sizeof(sorted));
-          for (size_t j = 1; j < 16; ++j) {
-            const int64_t value = sorted[j];
-            size_t k = j;
-            while (k > 0 && sorted[k - 1] > value) {
-              sorted[k] = sorted[k - 1];
-              --k;
-            }
-            sorted[k] = value;
-          }
-          board.pulsePeriod = (sorted[7] + sorted[8]) / 2.0;
-          if (sorted[0] <= board.pulsePeriod * 0.5 ||
-              sorted[15] >= board.pulsePeriod * 1.7) {
-            setFault(index + 1, "TIMING_STARTUP");
-            return;
-          }
-        }
-      } else if (interval >= board.pulsePeriod * 1.7) {
-        setTimingFault(index, "TIMING_MISSED", interval);
-        return;
-      } else if (interval <= board.pulsePeriod * 0.5) {
-        setTimingFault(index, "TIMING_GLITCH", interval);
-        return;
-      } else if (interval < board.pulsePeriod * 1.5) {
-        board.pulsePeriod += (interval - board.pulsePeriod) / 16;
-      }
-      board.lastInterval = interval;
     }
+    if (!faultEdge && board.timingDegraded) {
+      board.timingContext.observe(edge);
+    }
+    board.lastInterval = interval;
     board.lastPulseCount = event.count;
     board.lastPulseTime = event.time;
-    // Capture every edge locally, transmit 1/32 plus the first anchor.
-    if (event.count == 1 || event.count % 32 == 0) {
-      char line[LINE_CAPACITY];
-      snprintf(line, sizeof(line), "E2,A,%lu,%lu,%u,%llu,%lld\n",
-               static_cast<unsigned long>(session),
-               static_cast<unsigned long>(epoch), unsigned(index + 1),
-               static_cast<unsigned long long>(event.count),
-               static_cast<long long>(event.time));
-      enqueueLine(line);
+    if (board.timingDegraded && board.timingContext.complete()) {
+      disarmBoardTiming(index);
+      break;
     }
+  }
+}
+
+void emitFifoAnchor(size_t index, const PulseEvent &event,
+                    const TimingDiagnostic &diagnostic) {
+  Board &board = boards[index];
+  if (board.timingDegraded) {
+    return;
+  }
+  if (board.lastAnchorPosition) {
+    if (event.fifo.position <= board.lastAnchorPosition ||
+        event.time <= board.lastAnchorTime ||
+        (event.fifo.position - board.lastAnchorPosition) % FIFO_THRESHOLD) {
+      markTimingFault(index, "TIMING_ANCHOR_POSITION", &diagnostic);
+      return;
+    }
+    const double measured =
+        double(event.time - board.lastAnchorTime) /
+        double(event.fifo.position - board.lastAnchorPosition);
+    const double reference = board.pulsePeriod ? board.pulsePeriod : 7812.5;
+    if (measured < reference * 0.98 || measured > reference * 1.02) {
+      markTimingFault(index, "TIMING_ANCHOR_INTERVAL", &diagnostic);
+      return;
+    }
+    board.pulsePeriod = reference + (measured - reference) / 16;
+  }
+  board.lastAnchorPosition = event.fifo.position;
+  board.lastAnchorTime = event.time;
+  board.timingContext.observe(diagnostic);
+  // A is a one-based FIFO sample position; S/T retain raw callback counts.
+  if (++board.anchorsSeen == 1 || board.anchorsSeen % 4 == 0) {
+    char line[LINE_CAPACITY];
+    snprintf(line, sizeof(line), "E2,A,%lu,%lu,%u,%llu,%lld\n",
+             static_cast<unsigned long>(session),
+             static_cast<unsigned long>(epoch), unsigned(index + 1),
+             static_cast<unsigned long long>(event.fifo.position),
+             static_cast<long long>(event.time));
+    enqueueLine(line);
   }
 }
 
@@ -468,37 +627,109 @@ void serviceBoard(size_t index) {
     return;
   }
   if (!(board.status & (1UL << 23))) {
-    return;
-  }
-  char line[LINE_CAPACITY];
-  size_t used = snprintf(line, sizeof(line), "E2,D,%lu,%lu,%u,%llu,",
-                         static_cast<unsigned long>(session),
-                         static_cast<unsigned long>(epoch), unsigned(index + 1),
-                         static_cast<unsigned long long>(board.sequence));
-  size_t entries = 0;
-  for (size_t i = 0; i < 8; ++i) {
-    const FifoEntry entry = decodeFifo(readRegister(board, 0x21));
-    if (entry.empty) {
-      break;
+    if (board.pendingEdge && !board.timingDegraded) {
+      // Recheck a possible edge that arrived during the preceding STATUS read.
+      board.status = readRegister(board, 0x01);
+      if (!(board.status & (1UL << 23))) {
+        markTimingFault(index, "TIMING_THRESHOLD_ABSENT",
+                        &board.thresholdDiagnostic);
+      }
     }
-    if (entry.overflow || entry.reserved) {
-      setFault(index + 1, entry.overflow ? "FIFO_OVERFLOW" : "RESERVED_TAG");
+    if (!(board.status & (1UL << 23))) {
       return;
     }
-    used +=
-        snprintf(line + used, sizeof(line) - used, "%s%ld:%u",
-                 entries ? ";" : "", static_cast<long>(entry.value), entry.tag);
-    ++board.sequence; // Settling tags advance time, even with invalid voltage.
-    ++entries;
-    if (entry.last) {
+  }
+
+  processTiming(index);
+  bool hadEdge = board.pendingEdge;
+  PulseEvent edge = board.thresholdEdge;
+  TimingDiagnostic diagnostic = board.thresholdDiagnostic;
+  board.pendingEdge = false;
+  portENTER_CRITICAL(&captureMux);
+  captures[index].fifo.beginDrain();
+  portEXIT_CRITICAL(&captureMux);
+  // Catch an ISR that ran between the preceding queue check and drain marker.
+  processTiming(index);
+  if (board.pendingEdge && !board.timingDegraded) {
+    if (hadEdge) {
+      board.timingContext.observe(diagnostic);
+      markTimingFault(index, "TIMING_DUPLICATE_IRQ",
+                      &board.thresholdDiagnostic);
+    } else {
+      hadEdge = true;
+      edge = board.thresholdEdge;
+      diagnostic = board.thresholdDiagnostic;
+    }
+    board.pendingEdge = false;
+  }
+  if (!board.timingDegraded &&
+      (!hadEdge || !fifoAnchorMatches(edge.fifo, board.sequence))) {
+    markTimingFault(index,
+                    hadEdge ? "TIMING_ANCHOR_POSITION" : "TIMING_IRQ_MISSING",
+                    hadEdge ? &diagnostic : nullptr);
+  }
+
+  size_t total = 0;
+  // A delayed client may leave several threshold batches pending. Only the
+  // original falling edge gets an anchor; backlog reads do not invent edges.
+  for (size_t batch = 0; batch < 4 && !fault; ++batch) {
+    char line[LINE_CAPACITY];
+    size_t used = snprintf(
+        line, sizeof(line), "E2,D,%lu,%lu,%u,%llu,",
+        static_cast<unsigned long>(session), static_cast<unsigned long>(epoch),
+        unsigned(index + 1), static_cast<unsigned long long>(board.sequence));
+    size_t entries = 0;
+    for (size_t i = 0; i < FIFO_THRESHOLD; ++i) {
+      const FifoEntry entry = decodeFifo(readRegister(board, 0x21));
+      if (entry.empty) {
+        break;
+      }
+      if (entry.overflow || entry.reserved) {
+        setFault(index + 1, entry.overflow ? "FIFO_OVERFLOW" : "RESERVED_TAG");
+        break;
+      }
+      used += snprintf(line + used, sizeof(line) - used, "%s%ld:%u",
+                       entries ? ";" : "", static_cast<long>(entry.value),
+                       entry.tag);
+      // Settling records consume positions; the ISR sees reads in flight.
+      portENTER_CRITICAL(&captureMux);
+      board.sequence = captures[index].fifo.completeRead();
+      portEXIT_CRITICAL(&captureMux);
+      ++entries;
+      if (entry.last) {
+        break;
+      }
+    }
+    total += entries;
+    if (entries) {
+      board.lastDataTime = esp_timer_get_time();
+      line[used++] = '\n';
+      line[used] = 0;
+      enqueueLine(line);
+    }
+    if (entries < FIFO_THRESHOLD && !fault && !board.timingDegraded) {
+      markTimingFault(index, "TIMING_THRESHOLD_COUNT", &diagnostic);
+    }
+    board.status = readRegister(board, 0x01);
+    if (board.status & (1UL << 8)) {
+      setFault(index + 1, "PLL_UNLOCK");
+    }
+    if (board.status & (1UL << 22)) {
+      setFault(index + 1, "FIFO_OVERFLOW");
+    }
+    if (entries < FIFO_THRESHOLD || !(board.status & (1UL << 23))) {
       break;
     }
   }
-  if (entries) {
-    board.lastDataTime = esp_timer_get_time();
-    line[used++] = '\n';
-    line[used] = 0;
-    enqueueLine(line);
+  portENTER_CRITICAL(&captureMux);
+  captures[index].fifo.endDrain();
+  portEXIT_CRITICAL(&captureMux);
+  processTiming(index);
+  if (!fault && (board.status & (1UL << 23)) && !board.timingDegraded) {
+    markTimingFault(index, "TIMING_DRAIN_BUDGET", nullptr);
+  }
+  if (!fault && hadEdge && total >= FIFO_THRESHOLD) {
+    emitFifoAnchor(index, edge, diagnostic);
   }
 }
 
@@ -539,6 +770,7 @@ void handleFault(bool retry) {
 }
 
 void setup() {
+  Serial.onEvent(ARDUINO_USB_CDC_DISCONNECTED_EVENT, onUsbDisconnect);
   Serial.begin(BAUD_RATE);
   // Native USB CDC in the pinned Nano package; never wait for its TX mutex.
   Serial.setTxTimeoutMs(0);
@@ -566,8 +798,12 @@ void setup() {
 }
 
 void loop() {
-  if (!Serial) {
-    if (serialWasConnected) {
+  portENTER_CRITICAL(&captureMux);
+  const bool disconnected = usbDisconnectPending;
+  usbDisconnectPending = false;
+  portEXIT_CRITICAL(&captureMux);
+  if (disconnected || !Serial) {
+    if (serialWasConnected || disconnected) {
       disarmTiming();
       running = false;
       retryAfter = 0;
@@ -578,9 +814,16 @@ void loop() {
       // A new USB client must select a mode and start a fresh epoch.
       txHead = txTail = 0;
     }
+    inputCommand.reset();
     serialWasConnected = false;
-    delay(1);
-    return;
+    if (!Serial) {
+      // Discard old-client input only while disconnected, not a new selection.
+      for (size_t i = 0; i < 64 && Serial.available() > 0; ++i) {
+        Serial.read();
+      }
+      delay(1);
+      return;
+    }
   }
   serialWasConnected = true;
   pumpSerial();
@@ -608,6 +851,11 @@ void loop() {
       lastStatus = now;
       for (size_t i = 0; i < BOARD_COUNT; ++i) {
         emitStatus(i);
+      }
+    }
+    if (!fault) {
+      for (size_t i = 0; i < BOARD_COUNT; ++i) {
+        emitTimingContext(i);
       }
     }
     if (fault) {
