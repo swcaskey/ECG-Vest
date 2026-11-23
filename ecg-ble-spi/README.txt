@@ -1,4 +1,13 @@
-Three-lead ECG over BLE with SPI timing
+TLDR:
+- Flash Tx.ino onto esp32 attached to PCB
+- Flash Rx.ino onto esp32 connected to laptop
+- Power PCB
+- Run python plot_ecg.py COM8 (or whatever com port, check device manager)
+
+
+
+
+Three-lead ECG over BLE with SPI timing:
 
 ECG PCB and transmitter Nano ESP32  -- BLE -->  receiver Nano ESP32  -- USB -->  Mac
 
