@@ -3,5 +3,6 @@
   "core": "arduino:esp32@2.0.18-arduino.5",
   "arduinoCli": "1.5.1",
   "python": "3.14",
+  "pyInstaller": "6.22.3",
   "psScriptAnalyzer": "1.24.0"
 }

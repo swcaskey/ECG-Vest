@@ -6,115 +6,11 @@ import json
 from math import isfinite
 import os
 from pathlib import Path
-import sys
-from threading import Event, Lock, Thread
-import time
 
-from ecg.acquisition import Capture
+from ecg.live import LiveCapture
 from ecg.protocol import LEADS
 from ecg.recording import Playback, Recorder
 from ecg.timing import WINDOW
-
-
-class LiveCapture:
-    """Own the USB port on a worker while the graph redraws."""
-
-    def __init__(self, port_name, transport, command, recorder=None, echo=False):
-        self.port_name = port_name
-        self.capture = Capture(transport)
-        self.command = command
-        self.recorder = recorder
-        self.echo = echo
-        self.lock = Lock()
-        self.opened = Event()
-        self.stop = Event()
-        self.error = None
-        self.start_time = time.monotonic()
-        self.thread = Thread(target=self._run, daemon=True, name="ECG serial")
-
-    def _read(self, port, size):
-        chunk = port.read(size)
-        if not chunk:
-            return
-        if self.recorder:
-            self.recorder.write(chunk)
-        if self.echo:
-            sys.stdout.write(chunk.decode("ascii", errors="replace"))
-            sys.stdout.flush()
-        with self.lock:
-            self.capture.feed(chunk, time.monotonic())
-
-    def _run(self):
-        try:
-            import serial
-
-            with serial.Serial(
-                self.port_name, 115200, timeout=0.1, write_timeout=1
-            ) as port:
-                try:
-                    time.sleep(0.1)
-                    port.reset_input_buffer()
-                    port.write((self.command + "\n").encode("ascii"))
-                    self.opened.set()
-                    while not self.stop.is_set():
-                        self._read(port, min(max(1, port.in_waiting), 16384))
-                    if self.recorder:
-                        # Close normally on a line boundary, even when USB splits a line.
-                        deadline = time.monotonic() + 0.3
-                        while (
-                            self.capture.pending or self.capture.discarding_line
-                        ) and time.monotonic() < deadline:
-                            self._read(port, 1)
-                finally:
-                    try:
-                        port.dtr = False
-                        port.rts = False
-                    except OSError:
-                        pass  # A physically removed USB port cannot be reset.
-        except (OSError, RuntimeError, ImportError) as error:
-            self.error = error
-            with self.lock:
-                self.capture.invalidate(f"Serial session stopped: {error}")
-        finally:
-            self.opened.set()
-            self.stop.set()
-
-    def snapshot(self):
-        now = time.monotonic()
-        with self.lock:
-            x, y, status = self.capture.snapshot(now)
-            if self.capture.key is None and not self.capture.problem:
-                if self.capture.transport == "usb" and now - self.start_time > 8:
-                    status = (
-                        "No capture reply. Check the PCB Nano USB port and firmware."
-                    )
-                elif status.startswith("Looking for") and now - self.start_time > 15:
-                    status = (
-                        "Looking for the BLE transmitter. Check the PCB Nano power."
-                    )
-            return x, y, status
-
-    def __enter__(self):
-        self.thread.start()
-        try:
-            if not self.opened.wait(4):
-                raise TimeoutError("Timed out opening the ECG USB port")
-            if self.error:
-                raise self.error
-        except BaseException:
-            self.stop.set()
-            self.thread.join(timeout=2)
-            raise
-        return self
-
-    def __exit__(self, error_type, *_):
-        self.stop.set()
-        self.thread.join(timeout=2)
-        if error_type is None:
-            if self.thread.is_alive():
-                raise TimeoutError("ECG serial worker did not close")
-            if self.error:
-                raise self.error
 
 
 def show_plot(source, amplitude):
@@ -185,7 +81,7 @@ def choose_command():
 
 
 def recording_path(name):
-    base = (Path(__file__).resolve().parent / "recordings").resolve()
+    base = (Path(__file__).resolve().parents[1] / "recordings").resolve()
     path = Path(name)
     path = (path if path.is_absolute() else base / path).resolve()
     if not path.is_relative_to(base) or path.suffix.lower() != ".csv":

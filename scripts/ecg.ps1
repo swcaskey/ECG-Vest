@@ -344,7 +344,7 @@ try {
             if (-not $SelectedPort) { return }
             Write-Host "Opening $SelectedPort ($device)"
 
-            $plotArguments = @((Join-Path $ProjectRoot "plot_ecg.py"), "--port", $SelectedPort, "--transport", $Transport)
+            $plotArguments = @("-m", "ecg.plot_ecg", "--port", $SelectedPort, "--transport", $Transport)
             if ($Action -eq "monitor") { $plotArguments += "--monitor" }
             if ($PSBoundParameters.ContainsKey("Range")) {
                 $plotArguments += @("--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
@@ -369,7 +369,7 @@ try {
             if (-not (Test-Path -LiteralPath $SelectedRecording -PathType Leaf)) {
                 throw "Provide an existing CSV recording with -RecordingPath."
             }
-            $replayArguments = @((Join-Path $ProjectRoot "plot_ecg.py"), "--replay", $SelectedRecording)
+            $replayArguments = @("-m", "ecg.plot_ecg", "--replay", $SelectedRecording)
             if ($PSBoundParameters.ContainsKey("Range")) {
                 $replayArguments += @("--range", $Range.ToString([Globalization.CultureInfo]::InvariantCulture))
             }

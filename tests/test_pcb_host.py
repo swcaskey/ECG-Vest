@@ -5,10 +5,10 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from ecg.acquisition import Capture
+from ecg.plot_ecg import recording_path
 from ecg.protocol import parse_record
 from ecg.recording import Playback, Recorder
 from ecg.timing import SAMPLE_US
-from plot_ecg import recording_path
 
 
 def simulated_epoch(session, epoch, start_us=1_000_000):
@@ -129,7 +129,10 @@ class RecordingTests(unittest.TestCase):
                 self.assertIn("Incomplete final serial message", health["issues"])
 
     def test_recording_names_stay_in_ignored_directory(self):
-        self.assertEqual(recording_path("bench.csv").parent.name, "recordings")
+        recordings = Path(__file__).resolve().parents[1] / "recordings"
+        self.assertEqual(
+            recording_path("bench.csv"), (recordings / "bench.csv").resolve()
+        )
         with self.assertRaises(ValueError):
             recording_path("../bench.csv")
 

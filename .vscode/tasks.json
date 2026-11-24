@@ -187,6 +187,19 @@
                 "replay"
             ],
             "problemMatcher": []
+        },
+        {
+            "label": "ECG: 11. Build Windows App",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/build-app.ps1"
+            ],
+            "problemMatcher": []
         }
     ],
     "inputs": [

@@ -24,5 +24,10 @@ transport in the live task and type `go` to start.
 | `ECG: 8. Live Plot` | Show three measured traces. |
 | `ECG: 9. Start Recording` | Name a CSV and close the plot to stop recording. |
 | `ECG: 10. Replay Recording` | Select a saved capture by number. |
+| `ECG: 11. Build Windows App` | Create `.build/app/ECG Vest.exe`. |
 
-Recordings stay local in `recordings/`. [PCB pin map and bench checks](docs/timing.md)
+The Windows app combines live plots, serial, and replay. Its default recording
+folder is `Documents/ECG Vest/Recordings`. VS Code captures use `recordings/`.
+Vector View shows the three ECG traces beside a rotatable heart, with live or
+recorded vest data.
+[PCB pin map and bench checks](docs/timing.md)
