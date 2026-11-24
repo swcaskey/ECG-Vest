@@ -1,0 +1,220 @@
+{
+    "version": "2.0.0",
+    "options": {
+        "cwd": "${workspaceFolder}"
+    },
+    "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+    },
+    "tasks": [
+        {
+            "label": "ECG: 1. Format Code",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/format.ps1"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 2. Check Syntax",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/check-syntax.ps1"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 3. Build",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "build"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "ECG: 4. Run Unit Tests",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "test"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 5. Upload",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "upload",
+                "-Firmware",
+                "${input:firmware}"
+            ],
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "ECG: 6. List Boards",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "boards"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 7. Serial Monitor",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "monitor",
+                "-Transport",
+                "${input:transport}"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 8. Live Plot",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "plot",
+                "-Transport",
+                "${input:transport}"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 9. Start Recording",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "plot",
+                "-Transport",
+                "${input:transport}",
+                "-RecordPath",
+                "${input:recordingName}"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: * Setup Environment",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "setup"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "ECG: 10. Replay Recording",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/ecg.ps1",
+                "-Action",
+                "replay"
+            ],
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "firmware",
+            "type": "pickString",
+            "description": "Firmware to upload",
+            "options": [
+                { "label": "PCB Nano, direct USB", "value": "pcb_usb" },
+                { "label": "PCB Nano, BLE transmitter", "value": "pcb_ble_tx" },
+                { "label": "Separate Nano, BLE receiver", "value": "ble_receiver" }
+            ]
+        },
+        {
+            "id": "transport",
+            "type": "pickString",
+            "description": "Which Nano is connected to your computer?",
+            "options": [
+                { "label": "PCB Nano, direct USB", "value": "usb" },
+                { "label": "Separate Nano, BLE receiver", "value": "ble" }
+            ],
+            "default": "usb"
+        },
+        {
+            "id": "recordingName",
+            "type": "promptString",
+            "description": "New CSV filename (saved in recordings/; use a new name each time)",
+            "default": "recording.csv"
+        }
+    ]
+}

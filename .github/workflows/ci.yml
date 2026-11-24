@@ -1,0 +1,57 @@
+name: ECG Vest CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    name: Check source and build all PCB firmware targets
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell
+        working-directory: ECG-Vest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          path: ECG-Vest
+          persist-credentials: false
+      - name: Read shared tool versions
+        id: tools
+        run: |
+          $config = Get-Content toolchain.json -Raw | ConvertFrom-Json
+          "python=$($config.python)" >> $env:GITHUB_OUTPUT
+          "cli=$($config.arduinoCli)" >> $env:GITHUB_OUTPUT
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ steps.tools.outputs.python }}
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: ${{ steps.tools.outputs.cli }}
+      - name: Install shared development dependencies
+        run: ./scripts/ecg.ps1 -Action setup
+      - name: Check syntax and formatting without changing source
+        run: ./scripts/check-syntax.ps1
+      - name: Run unit tests without hardware
+        run: ./scripts/ecg.ps1 -Action test
+      - name: Build firmware using the local build script
+        run: ./scripts/ecg.ps1 -Action build
+      - name: Save compiled firmware
+        uses: actions/upload-artifact@v7
+        with:
+          name: nano-esp32-firmware-${{ github.sha }}
+          path: |
+            ECG-Vest/.build/*/*.bin
+            ECG-Vest/.build/*/*.elf
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
